@@ -1,0 +1,1501 @@
+[
+  {
+    "description": "House near a park, with a station close but not too close to the house.",
+    "edges": [
+      {
+        "lower": 0.0,
+        "sign": "--",
+        "source": "H",
+        "target": "P",
+        "upper": 20.0
+      },
+      {
+        "lower": 30.0,
+        "sign": "->",
+        "source": "H",
+        "target": "S",
+        "upper": 65.0
+      }
+    ],
+    "name": "p01_residential_area",
+    "template_points": {
+      "H": [
+        0,
+        0,
+        0
+      ],
+      "P": [
+        12,
+        3,
+        0
+      ],
+      "S": [
+        42,
+        0,
+        6
+      ]
+    },
+    "vertices": {
+      "H": "house",
+      "P": "park",
+      "S": "station"
+    }
+  },
+  {
+    "description": "Hotel, airport, museum, gallery, and beach arranged as a small itinerary loop.",
+    "edges": [
+      {
+        "lower": 80.0,
+        "sign": "--",
+        "source": "H",
+        "target": "A",
+        "upper": 160.0
+      },
+      {
+        "lower": 0.0,
+        "sign": "--",
+        "source": "H",
+        "target": "M",
+        "upper": 40.0
+      },
+      {
+        "lower": 0.0,
+        "sign": "--",
+        "source": "M",
+        "target": "G",
+        "upper": 35.0
+      },
+      {
+        "lower": 0.0,
+        "sign": "--",
+        "source": "G",
+        "target": "B",
+        "upper": 35.0
+      },
+      {
+        "lower": 60.0,
+        "sign": "--",
+        "source": "B",
+        "target": "H",
+        "upper": 95.0
+      }
+    ],
+    "name": "p02_trip_planning_loop",
+    "template_points": {
+      "A": [
+        120,
+        20,
+        10
+      ],
+      "B": [
+        74,
+        10,
+        5
+      ],
+      "G": [
+        50,
+        5,
+        8
+      ],
+      "H": [
+        0,
+        0,
+        0
+      ],
+      "M": [
+        25,
+        0,
+        0
+      ]
+    },
+    "vertices": {
+      "A": "airport",
+      "B": "beach",
+      "G": "gallery",
+      "H": "hotel",
+      "M": "museum"
+    }
+  },
+  {
+    "description": "Office, house, and waterworks in three separated 3-D regions.",
+    "edges": [
+      {
+        "lower": 70.0,
+        "sign": "--",
+        "source": "O",
+        "target": "H",
+        "upper": 130.0
+      },
+      {
+        "lower": 70.0,
+        "sign": "--",
+        "source": "O",
+        "target": "W",
+        "upper": 140.0
+      },
+      {
+        "lower": 60.0,
+        "sign": "--",
+        "source": "H",
+        "target": "W",
+        "upper": 130.0
+      }
+    ],
+    "name": "p03_human_settlement_triangle",
+    "template_points": {
+      "H": [
+        90,
+        10,
+        0
+      ],
+      "O": [
+        0,
+        0,
+        20
+      ],
+      "W": [
+        50,
+        90,
+        10
+      ]
+    },
+    "vertices": {
+      "H": "house",
+      "O": "office",
+      "W": "waterworks"
+    }
+  },
+  {
+    "description": "Warehouse, rail, port, customs, and airport along a freight corridor.",
+    "edges": [
+      {
+        "lower": 20.0,
+        "sign": "--",
+        "source": "W",
+        "target": "R",
+        "upper": 50.0
+      },
+      {
+        "lower": 30.0,
+        "sign": "--",
+        "source": "R",
+        "target": "P",
+        "upper": 70.0
+      },
+      {
+        "lower": 50.0,
+        "sign": "--",
+        "source": "P",
+        "target": "A",
+        "upper": 95.0
+      },
+      {
+        "lower": 20.0,
+        "sign": "--",
+        "source": "P",
+        "target": "C",
+        "upper": 55.0
+      },
+      {
+        "lower": 35.0,
+        "sign": "--",
+        "source": "C",
+        "target": "A",
+        "upper": 70.0
+      }
+    ],
+    "name": "p04_logistics_chain",
+    "template_points": {
+      "A": [
+        135,
+        35,
+        30
+      ],
+      "C": [
+        95,
+        40,
+        5
+      ],
+      "P": [
+        80,
+        15,
+        -5
+      ],
+      "R": [
+        35,
+        5,
+        0
+      ],
+      "W": [
+        0,
+        0,
+        0
+      ]
+    },
+    "vertices": {
+      "A": "airport",
+      "C": "customs",
+      "P": "port",
+      "R": "rail",
+      "W": "warehouse"
+    }
+  },
+  {
+    "description": "Hospital hub with nearby services and emergency facilities kept at a safer distance.",
+    "edges": [
+      {
+        "lower": 0.0,
+        "sign": "--",
+        "source": "H",
+        "target": "A",
+        "upper": 15.0
+      },
+      {
+        "lower": 0.0,
+        "sign": "--",
+        "source": "H",
+        "target": "P",
+        "upper": 30.0
+      },
+      {
+        "lower": 45.0,
+        "sign": "->",
+        "source": "H",
+        "target": "F",
+        "upper": 80.0
+      },
+      {
+        "lower": 40.0,
+        "sign": "<->",
+        "source": "H",
+        "target": "L",
+        "upper": 70.0
+      }
+    ],
+    "name": "p05_emergency_star",
+    "template_points": {
+      "A": [
+        8,
+        4,
+        0
+      ],
+      "F": [
+        60,
+        0,
+        0
+      ],
+      "H": [
+        0,
+        0,
+        0
+      ],
+      "L": [
+        42,
+        30,
+        6
+      ],
+      "P": [
+        20,
+        -5,
+        0
+      ]
+    },
+    "vertices": {
+      "A": "ambulance",
+      "F": "fire_station",
+      "H": "hospital",
+      "L": "police",
+      "P": "pharmacy"
+    }
+  },
+  {
+    "description": "Dorm-centered campus amenities with parking not directly adjacent to the dorm.",
+    "edges": [
+      {
+        "lower": 0.0,
+        "sign": "--",
+        "source": "D",
+        "target": "C",
+        "upper": 18.0
+      },
+      {
+        "lower": 0.0,
+        "sign": "--",
+        "source": "C",
+        "target": "L",
+        "upper": 20.0
+      },
+      {
+        "lower": 10.0,
+        "sign": "--",
+        "source": "L",
+        "target": "B",
+        "upper": 25.0
+      },
+      {
+        "lower": 10.0,
+        "sign": "--",
+        "source": "D",
+        "target": "G",
+        "upper": 35.0
+      },
+      {
+        "lower": 35.0,
+        "sign": "->",
+        "source": "D",
+        "target": "P",
+        "upper": 75.0
+      }
+    ],
+    "name": "p06_campus_hub",
+    "template_points": {
+      "B": [
+        35,
+        12,
+        8
+      ],
+      "C": [
+        10,
+        4,
+        0
+      ],
+      "D": [
+        0,
+        0,
+        0
+      ],
+      "G": [
+        15,
+        25,
+        10
+      ],
+      "L": [
+        22,
+        0,
+        4
+      ],
+      "P": [
+        55,
+        0,
+        0
+      ]
+    },
+    "vertices": {
+      "B": "lab",
+      "C": "cafe",
+      "D": "dorm",
+      "G": "gym",
+      "L": "library",
+      "P": "parking"
+    }
+  },
+  {
+    "description": "Mall, restaurant, cinema, parking, and transit in a diamond-like layout.",
+    "edges": [
+      {
+        "lower": 0.0,
+        "sign": "--",
+        "source": "M",
+        "target": "R",
+        "upper": 25.0
+      },
+      {
+        "lower": 0.0,
+        "sign": "--",
+        "source": "M",
+        "target": "C",
+        "upper": 30.0
+      },
+      {
+        "lower": 10.0,
+        "sign": "--",
+        "source": "R",
+        "target": "P",
+        "upper": 35.0
+      },
+      {
+        "lower": 20.0,
+        "sign": "--",
+        "source": "C",
+        "target": "P",
+        "upper": 45.0
+      },
+      {
+        "lower": 15.0,
+        "sign": "--",
+        "source": "P",
+        "target": "T",
+        "upper": 40.0
+      },
+      {
+        "lower": 45.0,
+        "sign": "->",
+        "source": "M",
+        "target": "T",
+        "upper": 75.0
+      }
+    ],
+    "name": "p07_retail_diamond",
+    "template_points": {
+      "C": [
+        0,
+        20,
+        5
+      ],
+      "M": [
+        0,
+        0,
+        0
+      ],
+      "P": [
+        35,
+        5,
+        0
+      ],
+      "R": [
+        15,
+        0,
+        0
+      ],
+      "T": [
+        60,
+        0,
+        5
+      ]
+    },
+    "vertices": {
+      "C": "cinema",
+      "M": "mall",
+      "P": "parking",
+      "R": "restaurant",
+      "T": "transit"
+    }
+  },
+  {
+    "description": "Three sensors and a relay forming a compact tetrahedral monitoring cell.",
+    "edges": [
+      {
+        "lower": 20.0,
+        "sign": "--",
+        "source": "S1",
+        "target": "S2",
+        "upper": 45.0
+      },
+      {
+        "lower": 20.0,
+        "sign": "--",
+        "source": "S1",
+        "target": "S3",
+        "upper": 45.0
+      },
+      {
+        "lower": 20.0,
+        "sign": "--",
+        "source": "S2",
+        "target": "S3",
+        "upper": 45.0
+      },
+      {
+        "lower": 20.0,
+        "sign": "--",
+        "source": "S1",
+        "target": "R",
+        "upper": 45.0
+      },
+      {
+        "lower": 20.0,
+        "sign": "--",
+        "source": "S2",
+        "target": "R",
+        "upper": 45.0
+      },
+      {
+        "lower": 20.0,
+        "sign": "--",
+        "source": "S3",
+        "target": "R",
+        "upper": 45.0
+      }
+    ],
+    "name": "p08_sensor_tetrahedron",
+    "template_points": {
+      "R": [
+        15,
+        10,
+        28
+      ],
+      "S1": [
+        0,
+        0,
+        0
+      ],
+      "S2": [
+        30,
+        0,
+        0
+      ],
+      "S3": [
+        15,
+        25,
+        0
+      ]
+    },
+    "vertices": {
+      "R": "relay",
+      "S1": "sensor_a",
+      "S2": "sensor_b",
+      "S3": "sensor_c"
+    }
+  },
+  {
+    "description": "Subsurface entrance, drill, sensor, pump, and vent with vertical separation.",
+    "edges": [
+      {
+        "lower": 20.0,
+        "sign": "--",
+        "source": "E",
+        "target": "D",
+        "upper": 40.0
+      },
+      {
+        "lower": 20.0,
+        "sign": "--",
+        "source": "D",
+        "target": "S",
+        "upper": 40.0
+      },
+      {
+        "lower": 20.0,
+        "sign": "--",
+        "source": "S",
+        "target": "P",
+        "upper": 35.0
+      },
+      {
+        "lower": 25.0,
+        "sign": "--",
+        "source": "D",
+        "target": "V",
+        "upper": 50.0
+      },
+      {
+        "lower": 25.0,
+        "sign": "--",
+        "source": "V",
+        "target": "S",
+        "upper": 45.0
+      }
+    ],
+    "name": "p09_cave_vertical_chain",
+    "template_points": {
+      "D": [
+        20,
+        0,
+        -20
+      ],
+      "E": [
+        0,
+        0,
+        0
+      ],
+      "P": [
+        55,
+        5,
+        -60
+      ],
+      "S": [
+        35,
+        10,
+        -45
+      ],
+      "V": [
+        10,
+        30,
+        -30
+      ]
+    },
+    "vertices": {
+      "D": "drill",
+      "E": "cave_entrance",
+      "P": "pump",
+      "S": "seismic_sensor",
+      "V": "vent"
+    }
+  },
+  {
+    "description": "Depot-to-target corridor through two waypoints and a charger, with a no-fly marker not too close.",
+    "edges": [
+      {
+        "lower": 35.0,
+        "sign": "--",
+        "source": "D",
+        "target": "W1",
+        "upper": 50.0
+      },
+      {
+        "lower": 35.0,
+        "sign": "--",
+        "source": "W1",
+        "target": "W2",
+        "upper": 55.0
+      },
+      {
+        "lower": 30.0,
+        "sign": "--",
+        "source": "W2",
+        "target": "C",
+        "upper": 50.0
+      },
+      {
+        "lower": 30.0,
+        "sign": "--",
+        "source": "C",
+        "target": "T",
+        "upper": 55.0
+      },
+      {
+        "lower": 20.0,
+        "sign": "->",
+        "source": "W2",
+        "target": "N",
+        "upper": 60.0
+      }
+    ],
+    "name": "p10_drone_corridor",
+    "template_points": {
+      "C": [
+        95,
+        30,
+        60
+      ],
+      "D": [
+        0,
+        0,
+        0
+      ],
+      "N": [
+        60,
+        35,
+        40
+      ],
+      "T": [
+        130,
+        40,
+        70
+      ],
+      "W1": [
+        35,
+        10,
+        20
+      ],
+      "W2": [
+        70,
+        5,
+        45
+      ]
+    },
+    "vertices": {
+      "C": "charger",
+      "D": "depot",
+      "N": "no_fly",
+      "T": "target",
+      "W1": "waypoint_a",
+      "W2": "waypoint_b"
+    }
+  },
+  {
+    "description": "Power infrastructure with transformer, substation, tower, battery, and control room.",
+    "edges": [
+      {
+        "lower": 25.0,
+        "sign": "--",
+        "source": "T",
+        "target": "S",
+        "upper": 50.0
+      },
+      {
+        "lower": 45.0,
+        "sign": "--",
+        "source": "S",
+        "target": "W",
+        "upper": 65.0
+      },
+      {
+        "lower": 25.0,
+        "sign": "--",
+        "source": "S",
+        "target": "B",
+        "upper": 45.0
+      },
+      {
+        "lower": 30.0,
+        "sign": "--",
+        "source": "S",
+        "target": "C",
+        "upper": 55.0
+      },
+      {
+        "lower": 35.0,
+        "sign": "--",
+        "source": "T",
+        "target": "C",
+        "upper": 60.0
+      }
+    ],
+    "name": "p11_utility_vertical",
+    "template_points": {
+      "B": [
+        -25,
+        10,
+        55
+      ],
+      "C": [
+        5,
+        40,
+        30
+      ],
+      "S": [
+        0,
+        0,
+        35
+      ],
+      "T": [
+        0,
+        0,
+        0
+      ],
+      "W": [
+        30,
+        0,
+        80
+      ]
+    },
+    "vertices": {
+      "B": "battery",
+      "C": "control_room",
+      "S": "substation",
+      "T": "transformer",
+      "W": "tower"
+    }
+  },
+  {
+    "description": "Ecological habitat cycle linking nest, water, tree, food, and hiding cover.",
+    "edges": [
+      {
+        "lower": 20.0,
+        "sign": "--",
+        "source": "N",
+        "target": "W",
+        "upper": 40.0
+      },
+      {
+        "lower": 15.0,
+        "sign": "--",
+        "source": "N",
+        "target": "T",
+        "upper": 35.0
+      },
+      {
+        "lower": 25.0,
+        "sign": "--",
+        "source": "W",
+        "target": "F",
+        "upper": 45.0
+      },
+      {
+        "lower": 20.0,
+        "sign": "--",
+        "source": "T",
+        "target": "F",
+        "upper": 40.0
+      },
+      {
+        "lower": 10.0,
+        "sign": "--",
+        "source": "N",
+        "target": "H",
+        "upper": 30.0
+      }
+    ],
+    "name": "p12_habitat_cycle",
+    "template_points": {
+      "F": [
+        35,
+        25,
+        10
+      ],
+      "H": [
+        -15,
+        15,
+        15
+      ],
+      "N": [
+        0,
+        0,
+        10
+      ],
+      "T": [
+        10,
+        20,
+        25
+      ],
+      "W": [
+        25,
+        0,
+        0
+      ]
+    },
+    "vertices": {
+      "F": "food",
+      "H": "hide",
+      "N": "nest",
+      "T": "tree",
+      "W": "water"
+    }
+  },
+  {
+    "description": "Multi-floor building pattern with lobby, elevator, office, cafe, gym, and apartment.",
+    "edges": [
+      {
+        "lower": 0.0,
+        "sign": "--",
+        "source": "L",
+        "target": "E",
+        "upper": 15.0
+      },
+      {
+        "lower": 40.0,
+        "sign": "--",
+        "source": "E",
+        "target": "O",
+        "upper": 70.0
+      },
+      {
+        "lower": 20.0,
+        "sign": "--",
+        "source": "O",
+        "target": "C",
+        "upper": 40.0
+      },
+      {
+        "lower": 25.0,
+        "sign": "--",
+        "source": "O",
+        "target": "G",
+        "upper": 45.0
+      },
+      {
+        "lower": 30.0,
+        "sign": "--",
+        "source": "G",
+        "target": "A",
+        "upper": 55.0
+      },
+      {
+        "lower": 80.0,
+        "sign": "--",
+        "source": "C",
+        "target": "A",
+        "upper": 110.0
+      }
+    ],
+    "name": "p13_highrise_vertical_mix",
+    "template_points": {
+      "A": [
+        5,
+        5,
+        130
+      ],
+      "C": [
+        15,
+        0,
+        35
+      ],
+      "E": [
+        0,
+        0,
+        10
+      ],
+      "G": [
+        -15,
+        5,
+        90
+      ],
+      "L": [
+        0,
+        0,
+        0
+      ],
+      "O": [
+        0,
+        0,
+        60
+      ]
+    },
+    "vertices": {
+      "A": "apartment",
+      "C": "cafe",
+      "E": "elevator",
+      "G": "gym",
+      "L": "lobby",
+      "O": "office"
+    }
+  },
+  {
+    "description": "Data-center services with generator and security constraints around the server hall.",
+    "edges": [
+      {
+        "lower": 0.0,
+        "sign": "--",
+        "source": "S",
+        "target": "C",
+        "upper": 20.0
+      },
+      {
+        "lower": 15.0,
+        "sign": "--",
+        "source": "S",
+        "target": "N",
+        "upper": 35.0
+      },
+      {
+        "lower": 50.0,
+        "sign": "->",
+        "source": "S",
+        "target": "G",
+        "upper": 85.0
+      },
+      {
+        "lower": 20.0,
+        "sign": "--",
+        "source": "G",
+        "target": "T",
+        "upper": 45.0
+      },
+      {
+        "lower": 25.0,
+        "sign": "--",
+        "source": "S",
+        "target": "U",
+        "upper": 55.0
+      }
+    ],
+    "name": "p14_datacenter_safety",
+    "template_points": {
+      "C": [
+        12,
+        0,
+        0
+      ],
+      "G": [
+        65,
+        0,
+        0
+      ],
+      "N": [
+        10,
+        20,
+        0
+      ],
+      "S": [
+        0,
+        0,
+        0
+      ],
+      "T": [
+        90,
+        15,
+        0
+      ],
+      "U": [
+        30,
+        35,
+        10
+      ]
+    },
+    "vertices": {
+      "C": "coolant",
+      "G": "generator",
+      "N": "network",
+      "S": "server_hall",
+      "T": "transformer",
+      "U": "security"
+    }
+  },
+  {
+    "description": "Geologic survey around a fault with seismic, well, spring, vent, and field lab.",
+    "edges": [
+      {
+        "lower": 15.0,
+        "sign": "--",
+        "source": "F",
+        "target": "S",
+        "upper": 30.0
+      },
+      {
+        "lower": 30.0,
+        "sign": "--",
+        "source": "S",
+        "target": "W",
+        "upper": 55.0
+      },
+      {
+        "lower": 25.0,
+        "sign": "--",
+        "source": "W",
+        "target": "P",
+        "upper": 50.0
+      },
+      {
+        "lower": 35.0,
+        "sign": "--",
+        "source": "F",
+        "target": "V",
+        "upper": 60.0
+      },
+      {
+        "lower": 45.0,
+        "sign": "--",
+        "source": "W",
+        "target": "V",
+        "upper": 80.0
+      },
+      {
+        "lower": 50.0,
+        "sign": "--",
+        "source": "W",
+        "target": "L",
+        "upper": 80.0
+      }
+    ],
+    "name": "p15_geologic_fault",
+    "template_points": {
+      "F": [
+        0,
+        0,
+        0
+      ],
+      "L": [
+        110,
+        0,
+        0
+      ],
+      "P": [
+        80,
+        45,
+        -10
+      ],
+      "S": [
+        20,
+        10,
+        5
+      ],
+      "V": [
+        40,
+        -30,
+        20
+      ],
+      "W": [
+        55,
+        20,
+        -15
+      ]
+    },
+    "vertices": {
+      "F": "fault",
+      "L": "field_lab",
+      "P": "spring",
+      "S": "seismic",
+      "V": "gas_vent",
+      "W": "well"
+    }
+  },
+  {
+    "description": "Marine volume with reef, buoy, dock, sonar, fishery, and beacon.",
+    "edges": [
+      {
+        "lower": 20.0,
+        "sign": "--",
+        "source": "R",
+        "target": "B",
+        "upper": 35.0
+      },
+      {
+        "lower": 20.0,
+        "sign": "--",
+        "source": "R",
+        "target": "S",
+        "upper": 40.0
+      },
+      {
+        "lower": 35.0,
+        "sign": "--",
+        "source": "R",
+        "target": "F",
+        "upper": 60.0
+      },
+      {
+        "lower": 60.0,
+        "sign": "--",
+        "source": "B",
+        "target": "D",
+        "upper": 95.0
+      },
+      {
+        "lower": 15.0,
+        "sign": "--",
+        "source": "D",
+        "target": "C",
+        "upper": 35.0
+      },
+      {
+        "lower": 45.0,
+        "sign": "--",
+        "source": "F",
+        "target": "C",
+        "upper": 75.0
+      }
+    ],
+    "name": "p16_marine_volume",
+    "template_points": {
+      "B": [
+        0,
+        0,
+        5
+      ],
+      "C": [
+        90,
+        -10,
+        10
+      ],
+      "D": [
+        75,
+        10,
+        0
+      ],
+      "F": [
+        45,
+        -20,
+        -15
+      ],
+      "R": [
+        0,
+        0,
+        -20
+      ],
+      "S": [
+        25,
+        15,
+        -30
+      ]
+    },
+    "vertices": {
+      "B": "buoy",
+      "C": "beacon",
+      "D": "dock",
+      "F": "fishery",
+      "R": "reef",
+      "S": "sonar"
+    }
+  },
+  {
+    "description": "Agricultural production cluster with field, silo, irrigation, road, market, and barn.",
+    "edges": [
+      {
+        "lower": 20.0,
+        "sign": "--",
+        "source": "F",
+        "target": "S",
+        "upper": 45.0
+      },
+      {
+        "lower": 25.0,
+        "sign": "--",
+        "source": "F",
+        "target": "I",
+        "upper": 45.0
+      },
+      {
+        "lower": 20.0,
+        "sign": "--",
+        "source": "F",
+        "target": "B",
+        "upper": 40.0
+      },
+      {
+        "lower": 20.0,
+        "sign": "--",
+        "source": "S",
+        "target": "R",
+        "upper": 45.0
+      },
+      {
+        "lower": 55.0,
+        "sign": "--",
+        "source": "R",
+        "target": "M",
+        "upper": 85.0
+      },
+      {
+        "lower": 45.0,
+        "sign": "--",
+        "source": "I",
+        "target": "R",
+        "upper": 75.0
+      }
+    ],
+    "name": "p17_agriculture_supply",
+    "template_points": {
+      "B": [
+        20,
+        25,
+        5
+      ],
+      "F": [
+        0,
+        0,
+        0
+      ],
+      "I": [
+        0,
+        35,
+        -5
+      ],
+      "M": [
+        120,
+        35,
+        5
+      ],
+      "R": [
+        55,
+        15,
+        0
+      ],
+      "S": [
+        30,
+        0,
+        0
+      ]
+    },
+    "vertices": {
+      "B": "barn",
+      "F": "field",
+      "I": "irrigation",
+      "M": "market",
+      "R": "road",
+      "S": "silo"
+    }
+  },
+  {
+    "description": "School near a park and clinic, while highway and bar are not too close.",
+    "edges": [
+      {
+        "lower": 0.0,
+        "sign": "--",
+        "source": "S",
+        "target": "P",
+        "upper": 30.0
+      },
+      {
+        "lower": 20.0,
+        "sign": "--",
+        "source": "S",
+        "target": "C",
+        "upper": 45.0
+      },
+      {
+        "lower": 75.0,
+        "sign": "->",
+        "source": "S",
+        "target": "H",
+        "upper": 130.0
+      },
+      {
+        "lower": 60.0,
+        "sign": "<->",
+        "source": "S",
+        "target": "B",
+        "upper": 100.0
+      }
+    ],
+    "name": "p18_school_safety",
+    "template_points": {
+      "B": [
+        70,
+        35,
+        0
+      ],
+      "C": [
+        30,
+        -5,
+        0
+      ],
+      "H": [
+        95,
+        0,
+        0
+      ],
+      "P": [
+        15,
+        10,
+        0
+      ],
+      "S": [
+        0,
+        0,
+        0
+      ]
+    },
+    "vertices": {
+      "B": "bar",
+      "C": "clinic",
+      "H": "highway",
+      "P": "park",
+      "S": "school"
+    }
+  },
+  {
+    "description": "Playground with clinic and school nearby, but factory mutually buffered.",
+    "edges": [
+      {
+        "lower": 0.0,
+        "sign": "--",
+        "source": "P",
+        "target": "C",
+        "upper": 30.0
+      },
+      {
+        "lower": 0.0,
+        "sign": "--",
+        "source": "P",
+        "target": "S",
+        "upper": 40.0
+      },
+      {
+        "lower": 90.0,
+        "sign": "<->",
+        "source": "P",
+        "target": "F",
+        "upper": 160.0
+      },
+      {
+        "lower": 20.0,
+        "sign": "--",
+        "source": "F",
+        "target": "W",
+        "upper": 45.0
+      }
+    ],
+    "name": "p19_playground_factory_buffer",
+    "template_points": {
+      "C": [
+        20,
+        0,
+        0
+      ],
+      "F": [
+        120,
+        0,
+        0
+      ],
+      "P": [
+        0,
+        0,
+        0
+      ],
+      "S": [
+        -25,
+        10,
+        0
+      ],
+      "W": [
+        150,
+        20,
+        0
+      ]
+    },
+    "vertices": {
+      "C": "clinic",
+      "F": "factory",
+      "P": "playground",
+      "S": "school",
+      "W": "warehouse"
+    }
+  },
+  {
+    "description": "Five inclusion edges forming a diamond/cycle, useful for skip-edge behavior.",
+    "edges": [
+      {
+        "lower": 20.0,
+        "sign": "--",
+        "source": "A",
+        "target": "B",
+        "upper": 40.0
+      },
+      {
+        "lower": 25.0,
+        "sign": "--",
+        "source": "A",
+        "target": "C",
+        "upper": 45.0
+      },
+      {
+        "lower": 25.0,
+        "sign": "--",
+        "source": "B",
+        "target": "D",
+        "upper": 45.0
+      },
+      {
+        "lower": 25.0,
+        "sign": "--",
+        "source": "C",
+        "target": "D",
+        "upper": 45.0
+      },
+      {
+        "lower": 25.0,
+        "sign": "--",
+        "source": "B",
+        "target": "C",
+        "upper": 45.0
+      },
+      {
+        "lower": 45.0,
+        "sign": "--",
+        "source": "A",
+        "target": "D",
+        "upper": 65.0
+      }
+    ],
+    "name": "p20_connected_diamond_skip_edges",
+    "template_points": {
+      "A": [
+        0,
+        0,
+        0
+      ],
+      "B": [
+        30,
+        0,
+        0
+      ],
+      "C": [
+        15,
+        30,
+        0
+      ],
+      "D": [
+        45,
+        30,
+        10
+      ]
+    },
+    "vertices": {
+      "A": "alpha",
+      "B": "beta",
+      "C": "gamma",
+      "D": "delta"
+    }
+  }
+]

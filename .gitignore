@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+.env
+results/*.csv
+results/*.json
+results/*.jsonl
+results/*_dataset/
+synthetic_objects.jsonl
+synthetic_patterns.json
+synthetic_planted_matches.json
+synthetic_metadata.json
+.pytest_cache
