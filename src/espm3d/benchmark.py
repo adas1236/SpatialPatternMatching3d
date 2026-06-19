@@ -221,9 +221,14 @@ RESULT_FIELDS = [
     "rss_before_mb",
     "rss_after_generation_mb",
     "rss_after_index_mb",
+    "rss_before_match_mb",
     "rss_after_match_mb",
     "rss_peak_scenario_mb",
+    "rss_peak_scenario_delta_mb",
     "rss_peak_match_mb",
+    "rss_peak_match_delta_mb",
+    "memory_sampler_interval_s",
+    "memory_trace_interval_s",
     "distinct_keywords",
     "keyword_postings_total",
     "keyword_postings_mean",
@@ -292,8 +297,12 @@ PATTERN_SUMMARY_FIELDS = [
     "match_time_max_s",
     "matches_returned_total",
     "matches_returned_mean",
+    "rss_before_match_mean_mb",
     "rss_peak_match_max_mb",
+    "rss_peak_match_delta_mean_mb",
+    "rss_peak_match_delta_max_mb",
     "rss_peak_scenario_mb",
+    "rss_peak_scenario_delta_mb",
     "generation_time_s",
     "index_build_time_s",
     "scenario_total_time_s",
@@ -367,6 +376,8 @@ class BenchmarkConfig:
     max_level: int = 10
     require_distinct_objects: bool = True
     write_dataset: bool = False
+    memory_sampler_interval_s: float = 0.05
+    memory_trace_interval_s: float = 0.0
     isolate_scenarios: bool = False
     cleanup_between_patterns: bool = False
     malloc_trim_between_patterns: bool = False
@@ -376,20 +387,42 @@ class MemorySampler:
     """Sample process RSS in a background thread.
 
     ``resource.getrusage`` only reports maximum RSS since process start on many
-    platforms.  Sampling current RSS gives a more useful peak for a benchmark
-    phase.  If psutil is unavailable, the sampler reports ``None``.
+    platforms. Sampling current RSS gives a more useful peak for a benchmark
+    phase. If psutil is unavailable, the sampler reports ``None``.
+
+    When ``trace_path`` and ``trace_interval_s`` are provided, the sampler also
+    appends periodic JSONL records. This is useful for memory-heavy runs where a
+    process may be killed before the normal per-pattern result row can be
+    written.
     """
 
-    def __init__(self, interval_s: float = 0.05) -> None:
-        self.interval_s = interval_s
+    _trace_lock = threading.Lock()
+
+    def __init__(
+        self,
+        interval_s: float = 0.05,
+        *,
+        trace_path: Optional[Path] = None,
+        trace_context: Optional[Mapping[str, Any]] = None,
+        trace_interval_s: float = 0.0,
+    ) -> None:
+        self.interval_s = max(float(interval_s), 0.005)
+        self.trace_path = trace_path
+        self.trace_context = dict(trace_context or {})
+        self.trace_interval_s = max(float(trace_interval_s), 0.0)
+        self._last_trace_s = 0.0
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._process = psutil.Process(os.getpid()) if psutil is not None else None
+        self.start_time_s = time.perf_counter()
         self.start_rss_mb: Optional[float] = current_rss_mb()
         self.peak_rss_mb: Optional[float] = self.start_rss_mb
         self.end_rss_mb: Optional[float] = None
 
     def __enter__(self) -> "MemorySampler":
+        if self.trace_interval_s > 0 and self.trace_path is not None:
+            self._write_trace(sample_kind="start")
+            self._last_trace_s = time.perf_counter()
         if self._process is not None:
             self._thread = threading.Thread(target=self._run, name="rss-sampler", daemon=True)
             self._thread.start()
@@ -405,6 +438,14 @@ class MemorySampler:
                 self.peak_rss_mb = self.end_rss_mb
             else:
                 self.peak_rss_mb = max(self.peak_rss_mb, self.end_rss_mb)
+        if self.trace_interval_s > 0 and self.trace_path is not None:
+            self._write_trace(sample_kind="end")
+
+    @property
+    def peak_delta_mb(self) -> Optional[float]:
+        if self.start_rss_mb is None or self.peak_rss_mb is None:
+            return None
+        return max(0.0, self.peak_rss_mb - self.start_rss_mb)
 
     def _run(self) -> None:
         assert self._process is not None
@@ -415,10 +456,46 @@ class MemorySampler:
                     self.peak_rss_mb = rss
                 else:
                     self.peak_rss_mb = max(self.peak_rss_mb, rss)
+                if self.trace_interval_s > 0 and self.trace_path is not None:
+                    now = time.perf_counter()
+                    if now - self._last_trace_s >= self.trace_interval_s:
+                        self._write_trace(sample_kind="sample", rss_mb=rss, now_s=now)
+                        self._last_trace_s = now
             except Exception:
                 pass
             self._stop.wait(self.interval_s)
 
+    def _write_trace(
+        self,
+        *,
+        sample_kind: str,
+        rss_mb: Optional[float] = None,
+        now_s: Optional[float] = None,
+    ) -> None:
+        if self.trace_path is None:
+            return
+        now_s = time.perf_counter() if now_s is None else now_s
+        if rss_mb is None:
+            rss_mb = current_rss_mb()
+        row = {
+            **self.trace_context,
+            "sample_kind": sample_kind,
+            "elapsed_s": now_s - self.start_time_s,
+            "rss_mb": rss_mb,
+            "peak_rss_mb": self.peak_rss_mb,
+            "peak_delta_mb": self.peak_delta_mb,
+            "pid": os.getpid(),
+            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        }
+        self.trace_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with self._trace_lock:
+                with self.trace_path.open("a", encoding="utf-8") as handle:
+                    handle.write(json.dumps(row, sort_keys=True, default=str) + "\n")
+                    handle.flush()
+        except Exception:
+            # Tracing should never make a benchmark fail.
+            pass
 
 class Timer:
     def __enter__(self) -> "Timer":
@@ -734,6 +811,7 @@ def _make_output_paths(output_dir: str | Path, run_id: str) -> Dict[str, Path]:
         "summary_csv": out / f"{run_id}_summary.csv",
         "summary_by_pattern_json": out / f"{run_id}_summary_by_pattern.json",
         "summary_by_pattern_csv": out / f"{run_id}_summary_by_pattern.csv",
+        "memory_trace_jsonl": out / f"{run_id}_memory_trace.jsonl",
     }
 
 
@@ -851,6 +929,8 @@ def _scenario_summary(
 
     match_times = _numeric_values(ok_rows, "match_time_s")
     matches = _numeric_values(ok_rows, "matches_returned")
+    rss_peak_match = _numeric_values(ok_rows, "rss_peak_match_mb")
+    rss_peak_match_delta = _numeric_values(ok_rows, "rss_peak_match_delta_mb")
     ematches = _numeric_values(ok_rows, "ematch_total")
     nmatch_final = _numeric_values(ok_rows, "nmatch_total_final_level")
     graph_density = _numeric_values(ok_rows, "candidate_graph_density_measured")
@@ -869,6 +949,11 @@ def _scenario_summary(
         "index_build_time_s": index_build_time_s,
         "scenario_total_time_s": scenario_total_time_s,
         "rss_peak_scenario_mb": rss_peak_scenario_mb,
+        "rss_peak_scenario_delta_mb": (
+            max(0.0, rss_peak_scenario_mb - rows[0].get("rss_before_mb"))
+            if rows and rss_peak_scenario_mb is not None and rows[0].get("rss_before_mb") is not None
+            else None
+        ),
         "patterns_attempted": len(rows),
         "patterns_ok": len(ok_rows),
         "patterns_error": len(error_rows),
@@ -879,6 +964,9 @@ def _scenario_summary(
         "match_time_max_s": _safe_max(match_times),
         "matches_returned_total": int(sum(matches)) if matches else None,
         "matches_returned_mean": _safe_mean(matches),
+        "rss_peak_match_max_mb": _safe_max(rss_peak_match),
+        "rss_peak_match_delta_mean_mb": _safe_mean(rss_peak_match_delta),
+        "rss_peak_match_delta_max_mb": _safe_max(rss_peak_match_delta),
         "ematch_total_mean": _safe_mean(ematches),
         "nmatch_total_final_level_mean": _safe_mean(nmatch_final),
         "skip_edge_count_mean": _safe_mean(skip_counts),
@@ -922,7 +1010,9 @@ def _pattern_summary_rows(rows: Sequence[Mapping[str, Any]]) -> List[Dict[str, A
 
         match_times = _numeric_values(ok_rows, "match_time_s")
         matches = _numeric_values(ok_rows, "matches_returned")
+        rss_before_match = _numeric_values(ok_rows, "rss_before_match_mb")
         rss_peak_match = _numeric_values(ok_rows, "rss_peak_match_mb")
+        rss_peak_match_delta = _numeric_values(ok_rows, "rss_peak_match_delta_mb")
         ematches = _numeric_values(ok_rows, "ematch_total")
         nmatch_all = _numeric_values(ok_rows, "nmatch_total_all_levels")
         nmatch_final = _numeric_values(ok_rows, "nmatch_total_final_level")
@@ -964,8 +1054,12 @@ def _pattern_summary_rows(rows: Sequence[Mapping[str, Any]]) -> List[Dict[str, A
                 "match_time_max_s": _safe_max(match_times),
                 "matches_returned_total": int(sum(matches)) if matches else None,
                 "matches_returned_mean": _safe_mean(matches),
+                "rss_before_match_mean_mb": _safe_mean(rss_before_match),
                 "rss_peak_match_max_mb": _safe_max(rss_peak_match),
+                "rss_peak_match_delta_mean_mb": _safe_mean(rss_peak_match_delta),
+                "rss_peak_match_delta_max_mb": _safe_max(rss_peak_match_delta),
                 "rss_peak_scenario_mb": first.get("rss_peak_scenario_mb"),
+                "rss_peak_scenario_delta_mb": first.get("rss_peak_scenario_delta_mb"),
                 "generation_time_s": first.get("generation_time_s"),
                 "index_build_time_s": first.get("index_build_time_s"),
                 "scenario_total_time_s": first.get("scenario_total_time_s"),
@@ -1144,6 +1238,8 @@ def _scenario_process_failure_row(
             "max_level": config.max_level,
             "require_distinct_objects": config.require_distinct_objects,
             "seed": _scenario_seed(config.seed, n_objects, profile_name),
+            "memory_sampler_interval_s": config.memory_sampler_interval_s,
+            "memory_trace_interval_s": config.memory_trace_interval_s,
         }
     )
     return row
@@ -1189,6 +1285,10 @@ def _config_to_worker_args(config: BenchmarkConfig, *, n_objects: int, profile_n
         str(config.min_level),
         "--max-level",
         str(config.max_level),
+        "--memory-sampler-interval",
+        str(config.memory_sampler_interval_s),
+        "--memory-trace-interval",
+        str(config.memory_trace_interval_s),
     ]
     if config.cluster_count is not None:
         args.extend(["--cluster-count", str(config.cluster_count)])
@@ -1222,6 +1322,9 @@ def _run_benchmark_isolated(config: BenchmarkConfig) -> Dict[str, Path]:
 
     run_id = datetime.now(timezone.utc).strftime("espm3d_%Y%m%dT%H%M%SZ")
     paths = _make_output_paths(config.output_dir, run_id)
+    memory_trace_path = paths["memory_trace_jsonl"] if config.memory_trace_interval_s > 0 else None
+    if memory_trace_path is not None:
+        memory_trace_path.write_text("", encoding="utf-8")
     patterns_with_scale = build_benchmark_patterns(config.pattern_count, config.interval_scales)
     scenarios = _iter_scenarios(config)
     worker_root = Path(config.output_dir) / f"{run_id}_worker_outputs"
@@ -1294,6 +1397,26 @@ def _run_benchmark_isolated(config: BenchmarkConfig) -> Dict[str, Path]:
                 scenario_rows.append(row)
                 print(row["error_message"], file=sys.stderr, flush=True)
 
+            # If worker-side memory tracing was enabled, merge its trace rows into
+            # the parent run.  This also preserves partial traces when a worker is
+            # killed mid-pattern before writing the normal result row.
+            if memory_trace_path is not None:
+                for trace_file in sorted(worker_dir.glob("*_memory_trace.jsonl")):
+                    try:
+                        with trace_file.open("r", encoding="utf-8") as src, memory_trace_path.open("a", encoding="utf-8") as dst:
+                            for line in src:
+                                if not line.strip():
+                                    continue
+                                try:
+                                    trace_row = json.loads(line)
+                                    trace_row["run_id"] = run_id
+                                    dst.write(json.dumps(trace_row, sort_keys=True, default=str) + "\n")
+                                except Exception:
+                                    dst.write(line)
+                            dst.flush()
+                    except Exception:
+                        pass
+
             for row in scenario_rows:
                 _write_jsonl_row(jsonl, row)
                 _write_csv_row(csv_writer, row)
@@ -1323,6 +1446,8 @@ def _run_benchmark_isolated(config: BenchmarkConfig) -> Dict[str, Path]:
 
     print("\nWrote benchmark outputs:")
     for key, path in paths.items():
+        if key == "memory_trace_jsonl" and config.memory_trace_interval_s <= 0:
+            continue
         print(f"  {key}: {path}")
     print(f"  worker_outputs: {worker_root}")
     return paths
@@ -1335,6 +1460,9 @@ def run_benchmark(config: BenchmarkConfig) -> Dict[str, Path]:
 
     run_id = datetime.now(timezone.utc).strftime("espm3d_%Y%m%dT%H%M%SZ")
     paths = _make_output_paths(config.output_dir, run_id)
+    memory_trace_path = paths["memory_trace_jsonl"] if config.memory_trace_interval_s > 0 else None
+    if memory_trace_path is not None:
+        memory_trace_path.write_text("", encoding="utf-8")
     patterns_with_scale = build_benchmark_patterns(config.pattern_count, config.interval_scales)
     scenarios = _iter_scenarios(config)
 
@@ -1372,7 +1500,7 @@ def run_benchmark(config: BenchmarkConfig) -> Dict[str, Path]:
                 target_density=controls["target_density"],
             )
             domain_metrics = _domain_metrics(bounds, n_objects)
-            scenario_memory = MemorySampler()
+            scenario_memory = MemorySampler(interval_s=config.memory_sampler_interval_s)
             dataset = None
             index = None
             matcher: Optional[ESPM3DMatcher] = None
@@ -1440,7 +1568,22 @@ def run_benchmark(config: BenchmarkConfig) -> Dict[str, Path]:
                             f"  [{pattern_index:03d}/{len(patterns_with_scale):03d}] {named_pattern.name}",
                             flush=True,
                         )
-                        match_memory = MemorySampler()
+                        match_trace_context = {
+                            "run_id": run_id,
+                            "scenario_id": scenario_id,
+                            "n_objects": n_objects,
+                            "sparsity_profile": controls["sparsity_profile"],
+                            "pattern_index": pattern_index,
+                            "pattern_name": named_pattern.name,
+                            "interval_scale": interval_scale,
+                            "phase": "pattern_match",
+                        }
+                        match_memory = MemorySampler(
+                            interval_s=config.memory_sampler_interval_s,
+                            trace_path=memory_trace_path,
+                            trace_context=match_trace_context,
+                            trace_interval_s=config.memory_trace_interval_s,
+                        )
                         row: Dict[str, Any] = {
                             "run_id": run_id,
                             "scenario_id": scenario_id,
@@ -1458,6 +1601,9 @@ def run_benchmark(config: BenchmarkConfig) -> Dict[str, Path]:
                             "rss_before_mb": rss_before,
                             "rss_after_generation_mb": rss_after_generation,
                             "rss_after_index_mb": rss_after_index,
+                            "rss_before_match_mb": match_memory.start_rss_mb,
+                            "memory_sampler_interval_s": config.memory_sampler_interval_s,
+                            "memory_trace_interval_s": config.memory_trace_interval_s,
                             **idx_summary,
                             **domain_metrics,
                             "n_noise_keywords": controls["n_noise_keywords"],
@@ -1485,6 +1631,7 @@ def run_benchmark(config: BenchmarkConfig) -> Dict[str, Path]:
                                     "match_time_s": match_timer.elapsed_s,
                                     "rss_after_match_mb": current_rss_mb(),
                                     "rss_peak_match_mb": match_memory.peak_rss_mb,
+                                    "rss_peak_match_delta_mb": match_memory.peak_delta_mb,
                                     **_stats_summary(stats),
                                     **_candidate_graph_summary(
                                         named_pattern.pattern,
@@ -1506,6 +1653,7 @@ def run_benchmark(config: BenchmarkConfig) -> Dict[str, Path]:
                                     "match_time_s": None,
                                     "rss_after_match_mb": current_rss_mb(),
                                     "rss_peak_match_mb": match_memory.peak_rss_mb,
+                                    "rss_peak_match_delta_mb": match_memory.peak_delta_mb,
                                     **_stats_summary(stats),
                                     **_candidate_graph_summary(
                                         named_pattern.pattern,
@@ -1518,6 +1666,7 @@ def run_benchmark(config: BenchmarkConfig) -> Dict[str, Path]:
                             )
                         row["scenario_total_time_s"] = time.perf_counter() - scenario_started
                         row["rss_peak_scenario_mb"] = scenario_memory.peak_rss_mb
+                        row["rss_peak_scenario_delta_mb"] = scenario_memory.peak_delta_mb
                         scenario_rows.append(dict(row))
                         _write_jsonl_row(jsonl, row)
                         _write_csv_row(csv_writer, row)
@@ -1555,9 +1704,14 @@ def run_benchmark(config: BenchmarkConfig) -> Dict[str, Path]:
                         "rss_before_mb": rss_before,
                         "rss_after_generation_mb": rss_after_generation,
                         "rss_after_index_mb": rss_after_index,
+                        "rss_before_match_mb": None,
                         "rss_after_match_mb": current_rss_mb(),
                         "rss_peak_scenario_mb": scenario_memory.peak_rss_mb,
+                        "rss_peak_scenario_delta_mb": scenario_memory.peak_delta_mb,
                         "rss_peak_match_mb": None,
+                        "rss_peak_match_delta_mb": None,
+                        "memory_sampler_interval_s": config.memory_sampler_interval_s,
+                        "memory_trace_interval_s": config.memory_trace_interval_s,
                         **idx_summary,
                         **_stats_summary(None),
                         **_empty_candidate_graph_summary(),
@@ -1628,6 +1782,8 @@ def run_benchmark(config: BenchmarkConfig) -> Dict[str, Path]:
 
     print("\nWrote benchmark outputs:")
     for key, path in paths.items():
+        if key == "memory_trace_jsonl" and config.memory_trace_interval_s <= 0:
+            continue
         print(f"  {key}: {path}")
     return paths
 
@@ -1733,6 +1889,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--allow-same-object", action="store_true", help="allow one object to satisfy multiple pattern vertices")
     parser.add_argument("--write-dataset", action="store_true", help="also write generated objects/patterns for each scenario")
     parser.add_argument(
+        "--memory-sampler-interval",
+        type=float,
+        default=0.05,
+        help=(
+            "seconds between in-process RSS samples used for peak-memory estimates. "
+            "Lower values are more precise but add a little overhead."
+        ),
+    )
+    parser.add_argument(
+        "--memory-trace-interval",
+        type=float,
+        default=0.0,
+        help=(
+            "if > 0, write periodic per-pattern RSS samples to *_memory_trace.jsonl at this interval. "
+            "Useful when a run may be OOM-killed before the normal result row is written."
+        ),
+    )
+    parser.add_argument(
         "--isolate-scenarios",
         action="store_true",
         help=(
@@ -1783,6 +1957,8 @@ def config_from_args(args: argparse.Namespace) -> BenchmarkConfig:
         max_level=args.max_level,
         require_distinct_objects=not args.allow_same_object,
         write_dataset=args.write_dataset,
+        memory_sampler_interval_s=args.memory_sampler_interval,
+        memory_trace_interval_s=args.memory_trace_interval,
         isolate_scenarios=args.isolate_scenarios,
         cleanup_between_patterns=args.cleanup_between_patterns or args.malloc_trim_between_patterns,
         malloc_trim_between_patterns=args.malloc_trim_between_patterns,
@@ -1804,6 +1980,10 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         parser.error("--interval-scales values must be >= 1.0")
     if any(name not in SPARSITY_PROFILES for name in config.sparsity_profiles):
         parser.error(f"unknown sparsity profile in {config.sparsity_profiles!r}")
+    if config.memory_sampler_interval_s <= 0:
+        parser.error("--memory-sampler-interval must be positive")
+    if config.memory_trace_interval_s < 0:
+        parser.error("--memory-trace-interval must be non-negative")
     run_benchmark(config)
 
 

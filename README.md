@@ -235,6 +235,7 @@ Each benchmark run writes timestamped files under `results/` or your chosen `--o
 <run_id>_summary.json     # JSON version of the scenario summary
 <run_id>_summary_by_pattern.csv  # one row per dataset-size/sparsity-profile/pattern summary
 <run_id>_summary_by_pattern.json # JSON version of the pattern-split summary
+<run_id>_memory_trace.jsonl      # optional periodic RSS trace, written only when --memory-trace-interval > 0
 ```
 
 ### Reading `<run_id>_summary.json`
@@ -253,6 +254,9 @@ Important fields:
 - `match_time_total_s`: total matching time over all patterns in that scenario.
 - `match_time_mean_s`, `match_time_median_s`, `match_time_max_s`: aggregate per-pattern match times.
 - `rss_peak_scenario_mb`: peak resident memory while generating, indexing, and matching the scenario.
+- `rss_peak_scenario_delta_mb`: peak scenario RSS minus the scenario-start RSS.
+- `rss_peak_match_max_mb`: largest per-pattern match-phase RSS peak in this scenario.
+- `rss_peak_match_delta_max_mb`: largest per-pattern match-phase RSS increase above that pattern's starting RSS.
 - `patterns_attempted`, `patterns_ok`, `patterns_error`: number of pattern runs and failures.
 - `limit_reached_count`: how many patterns hit `--match-limit`; when this is nonzero, returned match counts are lower bounds.
 - `matches_returned_total`: total matches returned across all patterns, subject to `--match-limit`.
@@ -302,7 +306,9 @@ Important fields:
 - `candidate_graph_density_mean`: measured implicit graph density for this pattern.
 - `candidate_pair_space_total_mean`, `candidate_pair_space_non_skip_mean`: keyword-compatible pair-space size for this pattern.
 - `ematch_total_mean`, `nmatch_total_final_level_mean`, `skip_edge_count_mean`: matcher-internal work indicators.
-- `rss_peak_match_max_mb`: peak memory sampled during this pattern match.
+- `rss_before_match_mean_mb`: RSS immediately before the pattern match began.
+- `rss_peak_match_max_mb`: peak memory sampled during this pattern match. This is absolute process RSS, so it includes the generated dataset and index already resident in memory.
+- `rss_peak_match_delta_mean_mb`, `rss_peak_match_delta_max_mb`: extra RSS consumed during the pattern match, measured as peak match RSS minus match-start RSS.
 
 Example: print a compact pattern-by-pattern table from the latest run.
 
@@ -356,7 +362,10 @@ Useful fields:
 - `matches_returned`: number of matches returned for this pattern, subject to `match_limit`.
 - `limit_reached`: true if the match limit was reached.
 - `match_time_s`: matching time for this one pattern.
-- `rss_peak_match_mb`: peak RSS during this one pattern match.
+- `rss_before_match_mb`: RSS immediately before this pattern match began.
+- `rss_peak_match_mb`: peak absolute RSS during this one pattern match. This includes the dataset and index that are already resident.
+- `rss_peak_match_delta_mb`: additional RSS used during this pattern match, computed as `rss_peak_match_mb - rss_before_match_mb`. This is usually the best per-pattern memory-pressure number.
+- `memory_sampler_interval_s`, `memory_trace_interval_s`: memory instrumentation settings used for the run.
 - `nmatch_total_all_levels`: total node-pair matches across octree levels.
 - `nmatch_total_final_level`: node-pair matches at the final level.
 - `ematch_total`: total e-matches for non-skip edges.
@@ -378,6 +387,51 @@ rows = [json.loads(line) for line in results_path.read_text().splitlines() if li
 slowest = sorted((r for r in rows if r['status'] == 'ok'), key=lambda r: r['match_time_s'], reverse=True)[:10]
 for r in slowest:
     print(r['scenario_id'], r['pattern_name'], r['match_time_s'], r['candidate_graph_density_measured'])
+PY
+```
+
+### Reading `<run_id>_memory_trace.jsonl`
+
+This file is written only when you pass `--memory-trace-interval` with a positive value. It is a periodic RSS trace during pattern matching. The normal raw result row is written after a pattern finishes, but if a worker is OOM-killed mid-pattern, that final row may never be written. The trace file is flushed incrementally, so it can preserve the last observed RSS before the kill.
+
+Example command:
+
+```bash
+python main.py \
+  --scales 100000 \
+  --sparsity-profiles dense_graph \
+  --isolate-scenarios \
+  --memory-trace-interval 1.0 \
+  --output-dir results/dense_trace
+```
+
+Each line is a JSON object with fields such as:
+
+- `scenario_id`, `n_objects`, `sparsity_profile`, `pattern_index`, `pattern_name`: the running pattern.
+- `sample_kind`: `start`, `sample`, or `end`.
+- `elapsed_s`: seconds since this pattern's memory sampler started.
+- `rss_mb`: sampled resident memory.
+- `peak_rss_mb`: highest sampled RSS so far for this pattern.
+- `peak_delta_mb`: highest sampled RSS so far minus pattern-start RSS.
+- `pid`: useful when `--isolate-scenarios` is enabled.
+
+Example: print the highest sampled RSS per pattern from the latest trace.
+
+```bash
+python - <<'PY'
+import json
+from collections import defaultdict
+from pathlib import Path
+
+trace_path = sorted(Path('results').glob('*_memory_trace.jsonl'))[-1]
+peaks = defaultdict(float)
+for line in trace_path.read_text().splitlines():
+    row = json.loads(line)
+    key = (row['scenario_id'], row['pattern_name'])
+    peaks[key] = max(peaks[key], row.get('peak_rss_mb') or 0.0)
+
+for (scenario_id, pattern_name), peak in sorted(peaks.items(), key=lambda kv: kv[1], reverse=True)[:20]:
+    print(scenario_id, pattern_name, peak)
 PY
 ```
 
@@ -445,6 +499,8 @@ python generate_synthetic_data.py smoke-test --n-objects 2000 --pattern-count 5
 - `--interval-scales ...` creates widened pattern variants.
 - `--seed N` controls random generation. Defaults to `42`; scenario-specific seeds are derived from the base seed, object count, and sparsity profile name.
 - `--output-dir PATH` controls where result files go.
+- `--memory-sampler-interval SECONDS` controls how often RSS is sampled for peak-memory estimates. The default is `0.05`. Smaller values are more precise but add a little overhead.
+- `--memory-trace-interval SECONDS` writes periodic per-pattern RSS samples to `<run_id>_memory_trace.jsonl`. The default is `0`, meaning disabled. Use values like `1.0` or `5.0` for large jobs where you want useful memory breadcrumbs if a worker is killed.
 - `--isolate-scenarios` runs each object-count/sparsity scenario in a fresh Python process and then aggregates the outputs. This is the safest mode for WSL and dense scenarios because memory is fully released when each child exits.
 - `--cleanup-between-patterns` runs Python garbage collection after every pattern run.
 - `--malloc-trim-between-patterns` also calls `malloc_trim(0)` on Linux/WSL after every pattern run. This can return freed glibc heap pages to the OS and implies pattern cleanup.
@@ -487,6 +543,7 @@ These are used directly only when `--sparsity-profiles manual` is selected.
 - `--isolate-scenarios` is the main reliability switch. It uses a fresh child process per scenario, so Python heap fragmentation or unreleased memory from previous scenarios cannot accumulate in the parent process. If a child dies, the parent writes a `scenario_process_error` raw row, keeps the partial outputs, and moves on.
 - `--cleanup-between-patterns` is lighter weight. It calls `gc.collect()` after each pattern. This can help if there is cyclic garbage, but it usually will not reduce RSS by itself.
 - `--malloc-trim-between-patterns` is more useful on WSL/Linux. It runs `gc.collect()` and then tries `malloc_trim(0)`, which can return freed heap pages to the OS. This may help after large e-match lists are freed.
+- `--memory-trace-interval SECONDS` does not reduce memory, but it makes OOM diagnosis much easier. For HPC jobs, `--memory-trace-interval 5.0` is a low-overhead choice; for a short dense debugging run, `1.0` gives more detail.
 
 A robust WSL command is:
 

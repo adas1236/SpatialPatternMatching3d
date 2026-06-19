@@ -58,6 +58,7 @@ def test_smoke_benchmark_writes_readable_results(tmp_path: Path):
         match_limit=10,
         n_noise_keywords=16,
         max_level=6,
+        memory_trace_interval_s=0.01,
     )
     paths = run_benchmark(config)
     assert paths["results_csv"].exists()
@@ -66,6 +67,7 @@ def test_smoke_benchmark_writes_readable_results(tmp_path: Path):
     assert paths["summary_json"].exists()
     assert paths["summary_by_pattern_csv"].exists()
     assert paths["summary_by_pattern_json"].exists()
+    assert paths["memory_trace_jsonl"].exists()
 
     csv_text = paths["results_csv"].read_text(encoding="utf-8")
     assert "pattern_name" in csv_text
@@ -77,6 +79,10 @@ def test_smoke_benchmark_writes_readable_results(tmp_path: Path):
     assert raw_lines[0]["sparsity_profile"] == "manual"
     assert "candidate_pair_space_total" in raw_lines[0]
     assert "candidate_graph_edges_by_edge" in raw_lines[0]
+    assert "rss_before_match_mb" in raw_lines[0]
+    assert "rss_peak_match_mb" in raw_lines[0]
+    assert "rss_peak_match_delta_mb" in raw_lines[0]
+    assert "memory_sampler_interval_s" in raw_lines[0]
 
     summary = json.loads(paths["summary_json"].read_text(encoding="utf-8"))
     assert len(summary) == 1
@@ -90,10 +96,19 @@ def test_smoke_benchmark_writes_readable_results(tmp_path: Path):
     assert all(row["scenario_id"] == "n300__manual" for row in summary_by_pattern)
     assert all("match_time_mean_s" in row for row in summary_by_pattern)
     assert all("candidate_graph_density_mean" in row for row in summary_by_pattern)
+    assert all("rss_peak_match_delta_max_mb" in row for row in summary_by_pattern)
 
     summary_by_pattern_csv = paths["summary_by_pattern_csv"].read_text(encoding="utf-8")
     assert "pattern_runs_attempted" in summary_by_pattern_csv
     assert "rss_peak_match_max_mb" in summary_by_pattern_csv
+    assert "rss_peak_match_delta_max_mb" in summary_by_pattern_csv
+
+    trace_rows = [
+        json.loads(line) for line in paths["memory_trace_jsonl"].read_text(encoding="utf-8").splitlines() if line
+    ]
+    assert trace_rows
+    assert trace_rows[0]["phase"] == "pattern_match"
+    assert "rss_mb" in trace_rows[0]
 
 
 def test_scenario_seed_is_stable_when_sweep_changes():
@@ -117,6 +132,7 @@ def test_isolated_benchmark_writes_aggregate_results(tmp_path: Path):
         max_level=4,
         isolate_scenarios=True,
         cleanup_between_patterns=True,
+        memory_trace_interval_s=0.01,
     )
     paths = run_benchmark(config)
     assert paths["results_jsonl"].exists()
@@ -125,3 +141,5 @@ def test_isolated_benchmark_writes_aggregate_results(tmp_path: Path):
     assert rows[0]["run_id"] in paths["results_jsonl"].name
     assert rows[0]["status"] == "ok"
     assert paths["summary_by_pattern_json"].exists()
+    assert paths["memory_trace_jsonl"].exists()
+    assert paths["memory_trace_jsonl"].read_text(encoding="utf-8").strip()
