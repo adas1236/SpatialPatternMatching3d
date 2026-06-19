@@ -64,6 +64,8 @@ def test_smoke_benchmark_writes_readable_results(tmp_path: Path):
     assert paths["results_jsonl"].exists()
     assert paths["summary_csv"].exists()
     assert paths["summary_json"].exists()
+    assert paths["summary_by_pattern_csv"].exists()
+    assert paths["summary_by_pattern_json"].exists()
 
     csv_text = paths["results_csv"].read_text(encoding="utf-8")
     assert "pattern_name" in csv_text
@@ -81,3 +83,45 @@ def test_smoke_benchmark_writes_readable_results(tmp_path: Path):
     assert summary[0]["sparsity_profile"] == "manual"
     assert "match_time_mean_s" in summary[0]
     assert "candidate_graph_density_mean" in summary[0]
+
+    summary_by_pattern = json.loads(paths["summary_by_pattern_json"].read_text(encoding="utf-8"))
+    assert len(summary_by_pattern) == 2
+    assert {row["pattern_name"] for row in summary_by_pattern}
+    assert all(row["scenario_id"] == "n300__manual" for row in summary_by_pattern)
+    assert all("match_time_mean_s" in row for row in summary_by_pattern)
+    assert all("candidate_graph_density_mean" in row for row in summary_by_pattern)
+
+    summary_by_pattern_csv = paths["summary_by_pattern_csv"].read_text(encoding="utf-8")
+    assert "pattern_runs_attempted" in summary_by_pattern_csv
+    assert "rss_peak_match_max_mb" in summary_by_pattern_csv
+
+
+def test_scenario_seed_is_stable_when_sweep_changes():
+    from espm3d.benchmark import _scenario_seed
+
+    seed_sparse_only = _scenario_seed(42, 10000, "sparse_graph")
+    seed_with_dense_also_present = _scenario_seed(42, 10000, "sparse_graph")
+    assert seed_sparse_only == seed_with_dense_also_present
+    assert seed_sparse_only != _scenario_seed(42, 10000, "dense_graph")
+
+
+def test_isolated_benchmark_writes_aggregate_results(tmp_path: Path):
+    config = BenchmarkConfig(
+        scales=(120,),
+        sparsity_profiles=("manual",),
+        pattern_count=1,
+        seed=321,
+        output_dir=str(tmp_path),
+        match_limit=5,
+        n_noise_keywords=8,
+        max_level=4,
+        isolate_scenarios=True,
+        cleanup_between_patterns=True,
+    )
+    paths = run_benchmark(config)
+    assert paths["results_jsonl"].exists()
+    rows = [json.loads(line) for line in paths["results_jsonl"].read_text(encoding="utf-8").splitlines() if line]
+    assert len(rows) == 1
+    assert rows[0]["run_id"] in paths["results_jsonl"].name
+    assert rows[0]["status"] == "ok"
+    assert paths["summary_by_pattern_json"].exists()

@@ -76,6 +76,40 @@ python main.py --scales 10000 100000 1m --pattern-count 20 --output-dir results/
 
 The runner accepts `k` and `m` suffixes, so `100k`, `1m`, and `10m` are valid.
 
+For memory-heavy runs, especially `dense_graph` or `full`, prefer isolated scenarios:
+
+```bash
+python main.py --profile standard --isolate-scenarios --malloc-trim-between-patterns
+```
+
+`--isolate-scenarios` runs each object-count/sparsity scenario in a fresh child Python process and aggregates the child outputs into the normal result files.  It is a little slower, but it is much safer when one dense scenario uses a lot of memory.  If a child is killed by the OS, the parent benchmark process records a `scenario_process_error` row and continues with the remaining scenarios.
+
+`--malloc-trim-between-patterns` is Linux/WSL-specific best-effort cleanup.  It runs garbage collection and then asks glibc to return freed heap pages to the OS after each pattern run.  Use it when RSS keeps rising across patterns or scenarios.
+
+This update also fixes a scenario-cleanup issue in the previous benchmark runner: the matcher object retained a reference to the scenario index, and the index retained the scenario objects. The cleanup now clears matcher, index, dataset, matches, and stats in dependency order before moving to the next scenario.
+
+## Reproducibility
+
+The benchmark has a reproducibility seed.  If you do not pass one, it uses:
+
+```bash
+--seed 42
+```
+
+Every scenario receives a deterministic derived seed based on:
+
+```text
+base seed + object count + sparsity profile name
+```
+
+That means `n100000__sparse_graph` gets the same generated data whether you run only `sparse_graph` or run `sparse_graph medium_graph dense_graph` together.  The actual scenario seed is written in every raw result row as `seed`, and the base config is written to `<run_id>_settings.json`.
+
+Example:
+
+```bash
+python main.py --profile standard --seed 12345 --output-dir results/seed_12345
+```
+
 ## Profiles now include graph-sparsity sweeps
 
 The original packaged benchmark swept object count only. The updated benchmark sweeps object count **and** named `--sparsity-profiles`.
@@ -199,6 +233,8 @@ Each benchmark run writes timestamped files under `results/` or your chosen `--o
 <run_id>_results.jsonl    # detailed machine-readable event log, one JSON object per pattern run
 <run_id>_summary.csv      # one row per dataset-size/sparsity-profile scenario
 <run_id>_summary.json     # JSON version of the scenario summary
+<run_id>_summary_by_pattern.csv  # one row per dataset-size/sparsity-profile/pattern summary
+<run_id>_summary_by_pattern.json # JSON version of the pattern-split summary
 ```
 
 ### Reading `<run_id>_summary.json`
@@ -238,6 +274,76 @@ for row in summary:
 PY
 ```
 
+### Reading `<run_id>_summary_by_pattern.json`
+
+`summary_by_pattern.json` is also a JSON array, but it does **not** average all
+patterns together.  Each object summarizes one pattern within one benchmark
+scenario:
+
+```text
+one row = one object count × one sparsity profile × one pattern variant
+```
+
+This is the easiest file to use when you want to compare scalability pattern by
+pattern without digging through the raw JSONL.  For example, if you run 2 scales,
+3 sparsity profiles, and 20 patterns, this file will contain `2 × 3 × 20 = 120`
+rows.
+
+Important fields:
+
+- `scenario_id`: object-count/profile combination, such as `n100000__sparse_graph`.
+- `pattern_name`: the pattern being summarized.
+- `interval_scale`: the interval-widening factor for this pattern variant.
+- `pattern_vertices`, `pattern_edges`, `exclusive_edges`: pattern complexity.
+- `pattern_runs_attempted`, `pattern_runs_ok`, `pattern_runs_error`: useful if repeated runs are added later.
+- `match_time_mean_s`, `match_time_median_s`, `match_time_max_s`: timing for this pattern in this scenario.
+- `matches_returned_total`, `matches_returned_mean`: returned matches, subject to `match_limit`.
+- `limit_reached_count`: nonzero means match counts were capped.
+- `candidate_graph_density_mean`: measured implicit graph density for this pattern.
+- `candidate_pair_space_total_mean`, `candidate_pair_space_non_skip_mean`: keyword-compatible pair-space size for this pattern.
+- `ematch_total_mean`, `nmatch_total_final_level_mean`, `skip_edge_count_mean`: matcher-internal work indicators.
+- `rss_peak_match_max_mb`: peak memory sampled during this pattern match.
+
+Example: print a compact pattern-by-pattern table from the latest run.
+
+```bash
+python - <<'PY'
+import json
+from pathlib import Path
+summary_path = sorted(Path('results').glob('*_summary_by_pattern.json'))[-1]
+rows = json.loads(summary_path.read_text())
+for row in rows:
+    print(
+        row['scenario_id'],
+        row['pattern_name'],
+        'time=', row['match_time_mean_s'],
+        'density=', row['candidate_graph_density_mean'],
+        'matches=', row['matches_returned_total'],
+    )
+PY
+```
+
+Example: find the slowest pattern for each scenario.
+
+```bash
+python - <<'PY'
+import json
+from collections import defaultdict
+from pathlib import Path
+
+summary_path = sorted(Path('results').glob('*_summary_by_pattern.json'))[-1]
+rows = [r for r in json.loads(summary_path.read_text()) if r['status'] == 'ok']
+
+by_scenario = defaultdict(list)
+for row in rows:
+    by_scenario[row['scenario_id']].append(row)
+
+for scenario_id, scenario_rows in sorted(by_scenario.items()):
+    slowest = max(scenario_rows, key=lambda r: r['match_time_mean_s'] or 0.0)
+    print(scenario_id, slowest['pattern_name'], slowest['match_time_mean_s'])
+PY
+```
+
 ### Reading `<run_id>_results.jsonl`
 
 `results.jsonl` is JSON Lines: each line is one complete pattern run. This is the best file for detailed analysis because it preserves per-pattern metrics and nested per-edge data.
@@ -246,7 +352,7 @@ Useful fields:
 
 - `scenario_id`, `sparsity_profile`, `n_objects`: identify the benchmark scenario.
 - `pattern_name`, `pattern_vertices`, `pattern_edges`, `exclusive_edges`, `interval_scale`: identify the pattern and its complexity.
-- `status`: `ok`, `error`, or `scenario_error`.
+- `status`: `ok`, `error`, `scenario_error`, or `scenario_process_error`. The last one means an isolated worker process exited or was killed before writing normal pattern rows.
 - `matches_returned`: number of matches returned for this pattern, subject to `match_limit`.
 - `limit_reached`: true if the match limit was reached.
 - `match_time_s`: matching time for this one pattern.
@@ -337,8 +443,11 @@ python generate_synthetic_data.py smoke-test --n-objects 2000 --pattern-count 5
 - `--list-sparsity-profiles` prints built-in profile definitions and exits.
 - `--pattern-count N` selects the first `N` built-in patterns.
 - `--interval-scales ...` creates widened pattern variants.
-- `--seed N` controls random generation.
+- `--seed N` controls random generation. Defaults to `42`; scenario-specific seeds are derived from the base seed, object count, and sparsity profile name.
 - `--output-dir PATH` controls where result files go.
+- `--isolate-scenarios` runs each object-count/sparsity scenario in a fresh Python process and then aggregates the outputs. This is the safest mode for WSL and dense scenarios because memory is fully released when each child exits.
+- `--cleanup-between-patterns` runs Python garbage collection after every pattern run.
+- `--malloc-trim-between-patterns` also calls `malloc_trim(0)` on Linux/WSL after every pattern run. This can return freed glibc heap pages to the OS and implies pattern cleanup.
 
 ### Match enumeration
 
@@ -369,6 +478,25 @@ These are used directly only when `--sparsity-profiles manual` is selected.
 - `--min-level N` forces objects to at least this octree level.
 - `--max-level N` caps octree depth.
 - `--write-dataset` writes generated objects, patterns, planted matches, and metadata for every scenario.
+- `--isolate-scenarios` runs each dataset-size/sparsity scenario in a fresh worker process. Use this for large WSL runs where you want the parent process to survive a worker OOM kill and continue to later scenarios.
+- `--cleanup-between-patterns` runs garbage collection after each pattern. This is usually unnecessary for small runs but can help dense runs.
+- `--malloc-trim-between-patterns` also calls Linux/glibc `malloc_trim(0)` after each pattern, which can return freed heap pages to the OS on WSL/Linux.
+
+### Memory-safety controls
+
+- `--isolate-scenarios` is the main reliability switch. It uses a fresh child process per scenario, so Python heap fragmentation or unreleased memory from previous scenarios cannot accumulate in the parent process. If a child dies, the parent writes a `scenario_process_error` raw row, keeps the partial outputs, and moves on.
+- `--cleanup-between-patterns` is lighter weight. It calls `gc.collect()` after each pattern. This can help if there is cyclic garbage, but it usually will not reduce RSS by itself.
+- `--malloc-trim-between-patterns` is more useful on WSL/Linux. It runs `gc.collect()` and then tries `malloc_trim(0)`, which can return freed heap pages to the OS. This may help after large e-match lists are freed.
+
+A robust WSL command is:
+
+```bash
+python main.py \
+  --profile standard \
+  --isolate-scenarios \
+  --malloc-trim-between-patterns \
+  --output-dir results/standard_isolated
+```
 
 ## A note on 10 million objects
 
@@ -377,6 +505,6 @@ The `full` profile includes 10 million objects and three sparsity profiles. This
 ```bash
 python main.py --scales 10000 --sparsity-profiles medium_graph --pattern-count 20
 python main.py --scales 100000 --sparsity-profiles sparse_graph dense_graph --pattern-count 20
-python main.py --scales 1m --sparsity-profiles sparse_graph --match-limit 1000
-python main.py --scales 10m --sparsity-profiles very_sparse_graph --match-limit 1000 --max-level 10
+python main.py --scales 1m --sparsity-profiles sparse_graph --match-limit 1000 --isolate-scenarios
+python main.py --scales 10m --sparsity-profiles very_sparse_graph --match-limit 1000 --max-level 10 --isolate-scenarios
 ```

@@ -1,8 +1,9 @@
 """Scalability benchmark runner for ESPM-3D.
 
 The benchmark runner records one detailed raw result row per
-``(dataset size, sparsity profile, pattern variant)`` and one aggregate summary
-row per ``(dataset size, sparsity profile)`` scenario.
+``(dataset size, sparsity profile, pattern variant)``.  It also writes two
+summary views: a scenario-level summary aggregated over all patterns and a
+pattern-level summary split by ``(dataset size, sparsity profile, pattern)``.
 
 The built-in profiles now vary *candidate graph sparsity*: roughly, how many
 object-pair edges survive between the keyword postings that participate in a
@@ -14,12 +15,16 @@ from __future__ import annotations
 
 import argparse
 import csv
+import ctypes
 import gc
+import hashlib
 import json
 import math
 import os
 import platform
+import signal
 import statistics
+import subprocess
 import sys
 import threading
 import time
@@ -263,6 +268,76 @@ RESULT_FIELDS = [
 ]
 
 
+PATTERN_SUMMARY_FIELDS = [
+    "run_id",
+    "scenario_id",
+    "n_objects",
+    "sparsity_profile",
+    "sparsity_description",
+    "pattern_index",
+    "pattern_name",
+    "pattern_description",
+    "pattern_vertices",
+    "pattern_edges",
+    "exclusive_edges",
+    "interval_scale",
+    "pattern_runs_attempted",
+    "pattern_runs_ok",
+    "pattern_runs_error",
+    "limit_reached_count",
+    "match_limit",
+    "match_time_total_s",
+    "match_time_mean_s",
+    "match_time_median_s",
+    "match_time_max_s",
+    "matches_returned_total",
+    "matches_returned_mean",
+    "rss_peak_match_max_mb",
+    "rss_peak_scenario_mb",
+    "generation_time_s",
+    "index_build_time_s",
+    "scenario_total_time_s",
+    "ematch_total_mean",
+    "nmatch_total_all_levels_mean",
+    "nmatch_total_final_level_mean",
+    "skip_edge_count_mean",
+    "candidate_pair_space_total_mean",
+    "candidate_pair_space_non_skip_mean",
+    "candidate_graph_edges_measured_mean",
+    "candidate_graph_density_mean",
+    "keyword_postings_min_by_vertex_mean",
+    "keyword_postings_mean_by_vertex_mean",
+    "keyword_postings_max_by_vertex_mean",
+    "distinct_keywords",
+    "keyword_postings_total",
+    "keyword_postings_mean",
+    "keyword_postings_max",
+    "index_tree_count",
+    "index_node_count",
+    "index_leaf_count",
+    "index_max_depth",
+    "domain_volume",
+    "object_density",
+    "expected_spacing",
+    "n_noise_keywords",
+    "clustered_fraction",
+    "cluster_count",
+    "cluster_std_fraction",
+    "extra_keyword_probability",
+    "max_keywords_per_object",
+    "pattern_keyword_weight",
+    "noise_keyword_weight",
+    "capacity",
+    "min_level",
+    "max_level",
+    "require_distinct_objects",
+    "seed",
+    "status",
+    "error_type",
+    "error_message",
+]
+
+
 @dataclass(frozen=True)
 class BenchmarkConfig:
     """Configuration for a scalability sweep."""
@@ -292,6 +367,9 @@ class BenchmarkConfig:
     max_level: int = 10
     require_distinct_objects: bool = True
     write_dataset: bool = False
+    isolate_scenarios: bool = False
+    cleanup_between_patterns: bool = False
+    malloc_trim_between_patterns: bool = False
 
 
 class MemorySampler:
@@ -361,6 +439,44 @@ def current_rss_mb() -> Optional[float]:
         return psutil.Process(os.getpid()).memory_info().rss / (1024.0 * 1024.0)
     except Exception:
         return None
+
+
+def release_memory_to_os(*, malloc_trim: bool = False) -> None:
+    """Release Python garbage and optionally ask glibc to return heap pages.
+
+    ``gc.collect()`` is portable and safe, but CPython/glibc may keep freed
+    arenas mapped to the process.  On Linux/WSL, ``malloc_trim(0)`` can return
+    some of those freed pages to the OS after memory-heavy pattern runs.  It is
+    a best-effort operation: unavailable platforms simply skip it.
+    """
+
+    gc.collect()
+    if not malloc_trim:
+        return
+    if not sys.platform.startswith("linux"):
+        return
+    try:
+        libc = ctypes.CDLL("libc.so.6")
+        malloc_trim_fn = getattr(libc, "malloc_trim", None)
+        if malloc_trim_fn is not None:
+            malloc_trim_fn(0)
+    except Exception:
+        # Memory cleanup should never make a benchmark fail.
+        pass
+
+
+def _scenario_seed(base_seed: int, n_objects: int, profile_name: str) -> int:
+    """Return a stable seed for one benchmark scenario.
+
+    The previous implementation used ``base_seed + scenario_index``.  That was
+    deterministic for a fixed sweep, but adding/removing a sparsity profile
+    changed the seeds of later scenarios.  Hashing the scenario identity makes
+    the seed stable for a given ``(base_seed, n_objects, sparsity_profile)``.
+    """
+
+    payload = f"{base_seed}|{n_objects}|{profile_name}".encode("utf-8")
+    digest = hashlib.blake2b(payload, digest_size=8).digest()
+    return int.from_bytes(digest, "big") % (2**31 - 1)
 
 
 def _json(value: Any) -> str:
@@ -616,6 +732,8 @@ def _make_output_paths(output_dir: str | Path, run_id: str) -> Dict[str, Path]:
         "results_csv": out / f"{run_id}_results.csv",
         "summary_json": out / f"{run_id}_summary.json",
         "summary_csv": out / f"{run_id}_summary.csv",
+        "summary_by_pattern_json": out / f"{run_id}_summary_by_pattern.json",
+        "summary_by_pattern_csv": out / f"{run_id}_summary_by_pattern.csv",
     }
 
 
@@ -780,8 +898,440 @@ def _scenario_summary(
     }
 
 
+def _pattern_summary_rows(rows: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+    """Create compact summary rows split by pattern within a scenario.
+
+    Raw ``results.jsonl`` rows keep all per-pattern and per-edge details.  This
+    summary view keeps the per-pattern split but flattens the most useful
+    metrics so it is easy to sort, filter, and plot.  The current benchmark runs
+    each pattern once per scenario, but this function aggregates groups so that
+    repeated runs/seeds can be added later without changing the output schema.
+    """
+
+    grouped: Dict[Tuple[Any, Any, Any], List[Mapping[str, Any]]] = {}
+    for row in rows:
+        key = (row.get("scenario_id"), row.get("pattern_name"), row.get("interval_scale"))
+        grouped.setdefault(key, []).append(row)
+
+    out: List[Dict[str, Any]] = []
+    for key in sorted(grouped, key=lambda item: (str(item[0]), str(item[1]), str(item[2]))):
+        group = grouped[key]
+        first = group[0]
+        ok_rows = [row for row in group if row.get("status") == "ok"]
+        error_rows = [row for row in group if row.get("status") not in (None, "ok")]
+
+        match_times = _numeric_values(ok_rows, "match_time_s")
+        matches = _numeric_values(ok_rows, "matches_returned")
+        rss_peak_match = _numeric_values(ok_rows, "rss_peak_match_mb")
+        ematches = _numeric_values(ok_rows, "ematch_total")
+        nmatch_all = _numeric_values(ok_rows, "nmatch_total_all_levels")
+        nmatch_final = _numeric_values(ok_rows, "nmatch_total_final_level")
+        skip_counts = _numeric_values(ok_rows, "skip_edge_count")
+        pair_space_total = _numeric_values(ok_rows, "candidate_pair_space_total")
+        pair_space_non_skip = _numeric_values(ok_rows, "candidate_pair_space_non_skip")
+        measured_edges = _numeric_values(ok_rows, "candidate_graph_edges_measured")
+        graph_density = _numeric_values(ok_rows, "candidate_graph_density_measured")
+        postings_min = _numeric_values(ok_rows, "keyword_postings_min_by_vertex")
+        postings_mean = _numeric_values(ok_rows, "keyword_postings_mean_by_vertex")
+        postings_max = _numeric_values(ok_rows, "keyword_postings_max_by_vertex")
+
+        status = "ok" if ok_rows and not error_rows else first.get("status")
+        if ok_rows and error_rows:
+            status = "mixed"
+
+        out.append(
+            {
+                "run_id": first.get("run_id"),
+                "scenario_id": first.get("scenario_id"),
+                "n_objects": first.get("n_objects"),
+                "sparsity_profile": first.get("sparsity_profile"),
+                "sparsity_description": first.get("sparsity_description"),
+                "pattern_index": first.get("pattern_index"),
+                "pattern_name": first.get("pattern_name"),
+                "pattern_description": first.get("pattern_description"),
+                "pattern_vertices": first.get("pattern_vertices"),
+                "pattern_edges": first.get("pattern_edges"),
+                "exclusive_edges": first.get("exclusive_edges"),
+                "interval_scale": first.get("interval_scale"),
+                "pattern_runs_attempted": len(group),
+                "pattern_runs_ok": len(ok_rows),
+                "pattern_runs_error": len(error_rows),
+                "limit_reached_count": sum(1 for row in ok_rows if row.get("limit_reached")),
+                "match_limit": first.get("match_limit"),
+                "match_time_total_s": sum(match_times) if match_times else None,
+                "match_time_mean_s": _safe_mean(match_times),
+                "match_time_median_s": _safe_median(match_times),
+                "match_time_max_s": _safe_max(match_times),
+                "matches_returned_total": int(sum(matches)) if matches else None,
+                "matches_returned_mean": _safe_mean(matches),
+                "rss_peak_match_max_mb": _safe_max(rss_peak_match),
+                "rss_peak_scenario_mb": first.get("rss_peak_scenario_mb"),
+                "generation_time_s": first.get("generation_time_s"),
+                "index_build_time_s": first.get("index_build_time_s"),
+                "scenario_total_time_s": first.get("scenario_total_time_s"),
+                "ematch_total_mean": _safe_mean(ematches),
+                "nmatch_total_all_levels_mean": _safe_mean(nmatch_all),
+                "nmatch_total_final_level_mean": _safe_mean(nmatch_final),
+                "skip_edge_count_mean": _safe_mean(skip_counts),
+                "candidate_pair_space_total_mean": _safe_mean(pair_space_total),
+                "candidate_pair_space_non_skip_mean": _safe_mean(pair_space_non_skip),
+                "candidate_graph_edges_measured_mean": _safe_mean(measured_edges),
+                "candidate_graph_density_mean": _safe_mean(graph_density),
+                "keyword_postings_min_by_vertex_mean": _safe_mean(postings_min),
+                "keyword_postings_mean_by_vertex_mean": _safe_mean(postings_mean),
+                "keyword_postings_max_by_vertex_mean": _safe_mean(postings_max),
+                "distinct_keywords": first.get("distinct_keywords"),
+                "keyword_postings_total": first.get("keyword_postings_total"),
+                "keyword_postings_mean": first.get("keyword_postings_mean"),
+                "keyword_postings_max": first.get("keyword_postings_max"),
+                "index_tree_count": first.get("index_tree_count"),
+                "index_node_count": first.get("index_node_count"),
+                "index_leaf_count": first.get("index_leaf_count"),
+                "index_max_depth": first.get("index_max_depth"),
+                "domain_volume": first.get("domain_volume"),
+                "object_density": first.get("object_density"),
+                "expected_spacing": first.get("expected_spacing"),
+                "n_noise_keywords": first.get("n_noise_keywords"),
+                "clustered_fraction": first.get("clustered_fraction"),
+                "cluster_count": first.get("cluster_count"),
+                "cluster_std_fraction": first.get("cluster_std_fraction"),
+                "extra_keyword_probability": first.get("extra_keyword_probability"),
+                "max_keywords_per_object": first.get("max_keywords_per_object"),
+                "pattern_keyword_weight": first.get("pattern_keyword_weight"),
+                "noise_keyword_weight": first.get("noise_keyword_weight"),
+                "capacity": first.get("capacity"),
+                "min_level": first.get("min_level"),
+                "max_level": first.get("max_level"),
+                "require_distinct_objects": first.get("require_distinct_objects"),
+                "seed": first.get("seed"),
+                "status": status,
+                "error_type": first.get("error_type") if error_rows else None,
+                "error_message": first.get("error_message") if error_rows else None,
+            }
+        )
+    return out
+
+
+def _write_summary_csv(path: Path, rows: Sequence[Mapping[str, Any]], fieldnames: Optional[Sequence[str]] = None) -> None:
+    """Write summary rows with nested values encoded as compact JSON."""
+
+    if fieldnames is None:
+        fieldnames = sorted({key for row in rows for key in row.keys()})
+    with path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=list(fieldnames), extrasaction="ignore")
+        writer.writeheader()
+        for row in rows:
+            converted: Dict[str, Any] = {}
+            for key in fieldnames:
+                value = row.get(key)
+                if isinstance(value, (dict, list, tuple, set)):
+                    converted[key] = _json(sorted(value) if isinstance(value, set) else value)
+                else:
+                    converted[key] = value
+            writer.writerow(converted)
+
+
+
+_INDEX_SUMMARY_KEYS = (
+    "distinct_keywords",
+    "keyword_postings_total",
+    "keyword_postings_mean",
+    "keyword_postings_max",
+    "index_tree_count",
+    "index_node_count",
+    "index_leaf_count",
+    "index_max_depth",
+)
+
+_DOMAIN_METRIC_KEYS = ("domain_volume", "object_density", "expected_spacing")
+
+_CONTROL_KEYS = (
+    "sparsity_profile",
+    "sparsity_description",
+    "n_noise_keywords",
+    "clustered_fraction",
+    "cluster_count",
+    "cluster_std_fraction",
+    "extra_keyword_probability",
+    "max_keywords_per_object",
+    "pattern_keyword_weight",
+    "noise_keyword_weight",
+)
+
+
+def _summary_from_scenario_rows(
+    *,
+    run_id: str,
+    scenario_id: str,
+    n_objects: int,
+    controls: Mapping[str, Any],
+    rows: Sequence[Mapping[str, Any]],
+    fallback_total_time_s: float,
+) -> Dict[str, Any]:
+    """Build a scenario summary from raw result rows.
+
+    This is used by isolated-scenario orchestration, where the child process
+    writes raw rows and the parent aggregates them into the main output files.
+    """
+
+    first = rows[0] if rows else {}
+    effective_controls = {key: first.get(key, controls.get(key)) for key in _CONTROL_KEYS}
+    idx_summary = {key: first.get(key) for key in _INDEX_SUMMARY_KEYS}
+    domain_metrics = {key: first.get(key) for key in _DOMAIN_METRIC_KEYS}
+    scenario_times = _numeric_values(rows, "scenario_total_time_s")
+    rss_peaks = _numeric_values(rows, "rss_peak_scenario_mb")
+    return _scenario_summary(
+        run_id=run_id,
+        scenario_id=scenario_id,
+        n_objects=n_objects,
+        controls=effective_controls,
+        generation_time_s=first.get("generation_time_s"),
+        index_build_time_s=first.get("index_build_time_s"),
+        scenario_total_time_s=max(scenario_times) if scenario_times else fallback_total_time_s,
+        rss_peak_scenario_mb=max(rss_peaks) if rss_peaks else first.get("rss_peak_scenario_mb"),
+        idx_summary=idx_summary,
+        domain_metrics=domain_metrics,
+        rows=rows,
+    )
+
+
+def _scenario_process_failure_row(
+    *,
+    run_id: str,
+    scenario_id: str,
+    n_objects: int,
+    profile_name: str,
+    controls: Mapping[str, Any],
+    config: BenchmarkConfig,
+    returncode: int,
+    elapsed_s: float,
+) -> Dict[str, Any]:
+    if returncode < 0:
+        signum = -returncode
+        try:
+            signame = signal.Signals(signum).name
+        except Exception:
+            signame = f"signal {signum}"
+        message = f"isolated scenario worker was terminated by {signame}"
+    else:
+        message = f"isolated scenario worker exited with code {returncode}"
+    if returncode in (-9, 137):
+        message += "; this is commonly consistent with an OOM kill on Linux/WSL"
+
+    row: Dict[str, Any] = {field: None for field in RESULT_FIELDS}
+    row.update(
+        {
+            "run_id": run_id,
+            "scenario_id": scenario_id,
+            "status": "scenario_process_error",
+            "error_type": "ProcessExited",
+            "error_message": message,
+            "n_objects": n_objects,
+            "sparsity_profile": controls["sparsity_profile"],
+            "sparsity_description": controls["sparsity_description"],
+            "match_limit": config.match_limit,
+            "scenario_total_time_s": elapsed_s,
+            "n_noise_keywords": controls["n_noise_keywords"],
+            "clustered_fraction": controls["clustered_fraction"],
+            "cluster_count": controls["cluster_count"],
+            "cluster_std_fraction": controls["cluster_std_fraction"],
+            "extra_keyword_probability": controls["extra_keyword_probability"],
+            "max_keywords_per_object": controls["max_keywords_per_object"],
+            "pattern_keyword_weight": controls["pattern_keyword_weight"],
+            "noise_keyword_weight": controls["noise_keyword_weight"],
+            "capacity": config.capacity,
+            "min_level": config.min_level,
+            "max_level": config.max_level,
+            "require_distinct_objects": config.require_distinct_objects,
+            "seed": _scenario_seed(config.seed, n_objects, profile_name),
+        }
+    )
+    return row
+
+
+def _config_to_worker_args(config: BenchmarkConfig, *, n_objects: int, profile_name: str, output_dir: Path) -> List[str]:
+    args: List[str] = [
+        "--profile",
+        "standard",
+        "--scales",
+        str(n_objects),
+        "--sparsity-profiles",
+        profile_name,
+        "--pattern-count",
+        str(config.pattern_count),
+        "--interval-scales",
+        *[str(v) for v in config.interval_scales],
+        "--seed",
+        str(config.seed),
+        "--output-dir",
+        str(output_dir),
+        "--match-limit",
+        "0" if config.match_limit is None else str(config.match_limit),
+        "--matches-per-pattern",
+        str(config.matches_per_pattern),
+        "--noise-keywords",
+        str(config.n_noise_keywords),
+        "--clustered-fraction",
+        str(config.clustered_fraction),
+        "--cluster-std-fraction",
+        str(config.cluster_std_fraction),
+        "--extra-keyword-probability",
+        str(config.extra_keyword_probability),
+        "--max-keywords-per-object",
+        str(config.max_keywords_per_object),
+        "--pattern-keyword-weight",
+        str(config.pattern_keyword_weight),
+        "--noise-keyword-weight",
+        str(config.noise_keyword_weight),
+        "--capacity",
+        str(config.capacity),
+        "--min-level",
+        str(config.min_level),
+        "--max-level",
+        str(config.max_level),
+    ]
+    if config.cluster_count is not None:
+        args.extend(["--cluster-count", str(config.cluster_count)])
+    if config.bounds is not None:
+        args.extend(["--bounds", *[str(v) for v in config.bounds]])
+    if config.domain_side is not None:
+        args.extend(["--domain-side", str(config.domain_side)])
+    if config.target_density is not None:
+        args.extend(["--target-density", str(config.target_density)])
+    if not config.ensure_patterns:
+        args.append("--no-plant")
+    if not config.require_distinct_objects:
+        args.append("--allow-same-object")
+    if config.write_dataset:
+        args.append("--write-dataset")
+    if config.cleanup_between_patterns:
+        args.append("--cleanup-between-patterns")
+    if config.malloc_trim_between_patterns:
+        args.append("--malloc-trim-between-patterns")
+    return args
+
+
+def _run_benchmark_isolated(config: BenchmarkConfig) -> Dict[str, Path]:
+    """Run each scenario in a fresh Python process and aggregate outputs.
+
+    This costs a little extra startup time, but it is the safest way to return
+    memory to the OS between scenarios.  If a dense scenario is killed by the
+    kernel OOM killer, the parent process records that scenario as failed and
+    continues with the remaining scenarios.
+    """
+
+    run_id = datetime.now(timezone.utc).strftime("espm3d_%Y%m%dT%H%M%SZ")
+    paths = _make_output_paths(config.output_dir, run_id)
+    patterns_with_scale = build_benchmark_patterns(config.pattern_count, config.interval_scales)
+    scenarios = _iter_scenarios(config)
+    worker_root = Path(config.output_dir) / f"{run_id}_worker_outputs"
+    worker_root.mkdir(parents=True, exist_ok=True)
+
+    settings = {
+        "run_id": run_id,
+        "config": asdict(config),
+        "system": system_info(),
+        "pattern_names": [p.name for p, _ in patterns_with_scale],
+        "sparsity_profile_definitions": {name: asdict(profile) for name, profile in SPARSITY_PROFILES.items()},
+        "profile_sparsity_sweeps": dict(PROFILE_SPARSITY_SWEEPS),
+        "created_utc": datetime.now(timezone.utc).isoformat(),
+        "worker_outputs_dir": str(worker_root),
+    }
+    paths["settings"].write_text(json.dumps(settings, indent=2, sort_keys=True), encoding="utf-8")
+
+    src_dir = Path(__file__).resolve().parents[1]
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(src_dir) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+
+    summary_rows: List[Dict[str, Any]] = []
+    summary_by_pattern_rows: List[Dict[str, Any]] = []
+    with paths["results_jsonl"].open("w", encoding="utf-8") as jsonl, paths["results_csv"].open(
+        "w", newline="", encoding="utf-8"
+    ) as csv_file:
+        csv_writer = csv.DictWriter(csv_file, fieldnames=RESULT_FIELDS)
+        csv_writer.writeheader()
+
+        for scenario_index, n_objects, profile_name, controls in scenarios:
+            scenario_id = f"n{n_objects}__{profile_name}"
+            print(
+                f"\n=== Isolated scenario {scenario_index}/{len(scenarios)}: "
+                f"n_objects={n_objects:,}, sparsity={profile_name} ===",
+                flush=True,
+            )
+            worker_dir = worker_root / f"{scenario_index:03d}_{scenario_id}"
+            worker_dir.mkdir(parents=True, exist_ok=True)
+            cmd = [
+                sys.executable,
+                "-m",
+                "espm3d.benchmark",
+                *_config_to_worker_args(config, n_objects=n_objects, profile_name=profile_name, output_dir=worker_dir),
+            ]
+            start = time.perf_counter()
+            completed = subprocess.run(cmd, env=env)
+            elapsed = time.perf_counter() - start
+
+            scenario_rows: List[Dict[str, Any]] = []
+            result_files = sorted(worker_dir.glob("*_results.jsonl"))
+            if completed.returncode == 0 and result_files:
+                latest_results = result_files[-1]
+                for line in latest_results.read_text(encoding="utf-8").splitlines():
+                    if not line.strip():
+                        continue
+                    row = json.loads(line)
+                    row["run_id"] = run_id
+                    scenario_rows.append(row)
+            else:
+                row = _scenario_process_failure_row(
+                    run_id=run_id,
+                    scenario_id=scenario_id,
+                    n_objects=n_objects,
+                    profile_name=profile_name,
+                    controls=controls,
+                    config=config,
+                    returncode=completed.returncode,
+                    elapsed_s=elapsed,
+                )
+                scenario_rows.append(row)
+                print(row["error_message"], file=sys.stderr, flush=True)
+
+            for row in scenario_rows:
+                _write_jsonl_row(jsonl, row)
+                _write_csv_row(csv_writer, row)
+            csv_file.flush()
+
+            summary_rows.append(
+                _summary_from_scenario_rows(
+                    run_id=run_id,
+                    scenario_id=scenario_id,
+                    n_objects=n_objects,
+                    controls=controls,
+                    rows=scenario_rows,
+                    fallback_total_time_s=elapsed,
+                )
+            )
+            # Do not create a pattern-summary row for a scenario that died before
+            # any pattern row was written.  The scenario-level summary records the failure.
+            if any(row.get("pattern_name") is not None for row in scenario_rows):
+                summary_by_pattern_rows.extend(_pattern_summary_rows(scenario_rows))
+
+    paths["summary_json"].write_text(json.dumps(summary_rows, indent=2, sort_keys=True), encoding="utf-8")
+    _write_summary_csv(paths["summary_csv"], summary_rows)
+    paths["summary_by_pattern_json"].write_text(
+        json.dumps(summary_by_pattern_rows, indent=2, sort_keys=True), encoding="utf-8"
+    )
+    _write_summary_csv(paths["summary_by_pattern_csv"], summary_by_pattern_rows, PATTERN_SUMMARY_FIELDS)
+
+    print("\nWrote benchmark outputs:")
+    for key, path in paths.items():
+        print(f"  {key}: {path}")
+    print(f"  worker_outputs: {worker_root}")
+    return paths
+
 def run_benchmark(config: BenchmarkConfig) -> Dict[str, Path]:
     """Run the benchmark and return paths of written result files."""
+
+    if config.isolate_scenarios:
+        return _run_benchmark_isolated(config)
 
     run_id = datetime.now(timezone.utc).strftime("espm3d_%Y%m%dT%H%M%SZ")
     paths = _make_output_paths(config.output_dir, run_id)
@@ -800,6 +1350,7 @@ def run_benchmark(config: BenchmarkConfig) -> Dict[str, Path]:
     paths["settings"].write_text(json.dumps(settings, indent=2, sort_keys=True), encoding="utf-8")
 
     summary_rows: List[Dict[str, Any]] = []
+    summary_by_pattern_rows: List[Dict[str, Any]] = []
     with paths["results_jsonl"].open("w", encoding="utf-8") as jsonl, paths["results_csv"].open(
         "w", newline="", encoding="utf-8"
     ) as csv_file:
@@ -824,6 +1375,9 @@ def run_benchmark(config: BenchmarkConfig) -> Dict[str, Path]:
             scenario_memory = MemorySampler()
             dataset = None
             index = None
+            matcher: Optional[ESPM3DMatcher] = None
+            matches: Optional[List[Dict[str, Any]]] = None
+            stats: Optional[MatchStats] = None
             idx_summary: Dict[str, Any] = {}
             metadata: Dict[str, Any] = {}
             generation_time_s: Optional[float] = None
@@ -832,7 +1386,7 @@ def run_benchmark(config: BenchmarkConfig) -> Dict[str, Path]:
             rss_after_generation = None
             rss_after_index = None
             scenario_rows: List[Dict[str, Any]] = []
-            scenario_seed = config.seed + scenario_index - 1
+            scenario_seed = _scenario_seed(config.seed, n_objects, profile_name)
 
             with scenario_memory:
                 try:
@@ -968,6 +1522,10 @@ def run_benchmark(config: BenchmarkConfig) -> Dict[str, Path]:
                         _write_jsonl_row(jsonl, row)
                         _write_csv_row(csv_writer, row)
                         csv_file.flush()
+                        matches = None
+                        stats = None
+                        if config.cleanup_between_patterns or config.malloc_trim_between_patterns:
+                            release_memory_to_os(malloc_trim=config.malloc_trim_between_patterns)
 
                 except BaseException as exc:
                     # Generation/index errors are scenario-level failures.  Write one row and continue when possible.
@@ -1041,16 +1599,32 @@ def run_benchmark(config: BenchmarkConfig) -> Dict[str, Path]:
                             rows=scenario_rows,
                         )
                     )
-                    del index
-                    del dataset
-                    gc.collect()
+                    summary_by_pattern_rows.extend(_pattern_summary_rows(scenario_rows))
+                    # Break references in dependency order. ``matcher`` owns the
+                    # index, and the index owns references to all objects. Clearing
+                    # only ``index`` is not enough if ``matcher`` is still alive.
+                    matcher = None
+                    index = None
+                    dataset = None
+                    matches = None
+                    stats = None
+                    # Always run gc between scenarios. On Linux/WSL, also trim
+                    # the allocator heap so freed pages are returned to the VM.
+                    release_memory_to_os(malloc_trim=True)
+                    # Keep summaries valid even if a later scenario is killed.
+                    paths["summary_json"].write_text(json.dumps(summary_rows, indent=2, sort_keys=True), encoding="utf-8")
+                    _write_summary_csv(paths["summary_csv"], summary_rows)
+                    paths["summary_by_pattern_json"].write_text(
+                        json.dumps(summary_by_pattern_rows, indent=2, sort_keys=True), encoding="utf-8"
+                    )
+                    _write_summary_csv(paths["summary_by_pattern_csv"], summary_by_pattern_rows, PATTERN_SUMMARY_FIELDS)
 
     paths["summary_json"].write_text(json.dumps(summary_rows, indent=2, sort_keys=True), encoding="utf-8")
-    with paths["summary_csv"].open("w", newline="", encoding="utf-8") as f:
-        fieldnames = sorted({k for row in summary_rows for k in row.keys()})
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(summary_rows)
+    _write_summary_csv(paths["summary_csv"], summary_rows)
+    paths["summary_by_pattern_json"].write_text(
+        json.dumps(summary_by_pattern_rows, indent=2, sort_keys=True), encoding="utf-8"
+    )
+    _write_summary_csv(paths["summary_by_pattern_csv"], summary_by_pattern_rows, PATTERN_SUMMARY_FIELDS)
 
     print("\nWrote benchmark outputs:")
     for key, path in paths.items():
@@ -1158,6 +1732,25 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-level", type=int, default=10)
     parser.add_argument("--allow-same-object", action="store_true", help="allow one object to satisfy multiple pattern vertices")
     parser.add_argument("--write-dataset", action="store_true", help="also write generated objects/patterns for each scenario")
+    parser.add_argument(
+        "--isolate-scenarios",
+        action="store_true",
+        help=(
+            "run each dataset-size/sparsity scenario in a fresh Python process. "
+            "This is slower but much more robust for memory-heavy dense runs; if a "
+            "worker is killed, the parent records the failure and continues."
+        ),
+    )
+    parser.add_argument(
+        "--cleanup-between-patterns",
+        action="store_true",
+        help="run garbage collection after every pattern run",
+    )
+    parser.add_argument(
+        "--malloc-trim-between-patterns",
+        action="store_true",
+        help="on Linux/WSL, also call glibc malloc_trim(0) after pattern runs to return freed heap pages",
+    )
     return parser
 
 
@@ -1190,6 +1783,9 @@ def config_from_args(args: argparse.Namespace) -> BenchmarkConfig:
         max_level=args.max_level,
         require_distinct_objects=not args.allow_same_object,
         write_dataset=args.write_dataset,
+        isolate_scenarios=args.isolate_scenarios,
+        cleanup_between_patterns=args.cleanup_between_patterns or args.malloc_trim_between_patterns,
+        malloc_trim_between_patterns=args.malloc_trim_between_patterns,
     )
 
 
