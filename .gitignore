@@ -16,3 +16,4 @@ logs
 run_eval.sh
 run_hamburg_eval.sh
 data
+hamburg_buildings_facade_amenities_trees.csv
