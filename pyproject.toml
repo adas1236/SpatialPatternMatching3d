@@ -22,6 +22,8 @@ dev = [
 [project.scripts]
 espm3d-benchmark = "espm3d.benchmark:main"
 generate-synthetic-data = "espm3d.generate_synthetic_data:main"
+format-results-latex = "espm3d.format_results_latex:main"
+convert-hamburg-data = "espm3d.convert_hamburg_data:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

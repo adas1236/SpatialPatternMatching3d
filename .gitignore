@@ -6,12 +6,13 @@ __pycache__/
 .venv/
 venv/
 .env
-results/*.csv
-results/*.json
-results/*.jsonl
-results/*_dataset/
+results
 synthetic_objects.jsonl
 synthetic_patterns.json
 synthetic_planted_matches.json
 synthetic_metadata.json
 .pytest_cache
+logs
+run_eval.sh
+run_hamburg_eval.sh
+data

@@ -16,11 +16,14 @@ The implementation favors clarity and reproducibility. It is not a disk-backed p
 espm3d_repo/
 ├── main.py                         # Benchmark entry point
 ├── generate_synthetic_data.py      # Thin CLI wrapper for the synthetic data generator
+├── convert_hamburg_data.py         # Thin CLI wrapper for the Hamburg CSV converter
+├── format_results_latex.py         # Thin CLI wrapper for LaTeX table formatting
 ├── pyproject.toml                  # Package metadata, dependencies, console scripts
 ├── README.md
 ├── LICENSE
 ├── examples/
-│   └── default_patterns_20.json    # JSON copy of the built-in pattern suite
+│   ├── default_patterns_20.json    # JSON copy of the built-in synthetic pattern suite
+│   └── hamburg_patterns_5.json     # Suggested real-data patterns for the Hamburg CSV
 ├── results/
 │   └── .gitkeep                    # Benchmark outputs are written here by default
 ├── src/
@@ -28,6 +31,8 @@ espm3d_repo/
 │       ├── __init__.py
 │       ├── matcher.py              # Index, matcher, pattern/object classes
 │       ├── generate_synthetic_data.py
+│       ├── convert_hamburg_data.py # Hamburg real-data conversion and patterns
+│       ├── format_results_latex.py
 │       └── benchmark.py            # Scalability and graph-sparsity benchmark runner
 └── tests/
     ├── test_matcher.py
@@ -47,6 +52,97 @@ python -m pytest -q
 ```
 
 You can also run the scripts from the repository root without installing; `main.py` and `generate_synthetic_data.py` add `src/` to `sys.path` automatically.
+
+
+## Convert the Hamburg real-data CSV
+
+The repository includes a converter for the Hamburg buildings/facades/amenities/
+trees CSV.  That CSV is not purely a point dataset: most rows describe an
+axis-aligned rectangular prism or a 2-D area through `lowerCorner_*` and
+`upperCorner_*`.  The converter turns each base feature into ESPM-3D point
+objects by using the **bottom-center** and **top-center** of that prism.  This
+preserves vertical information better than a single centroid.  By default it
+also converts facade `Door`/`Window` rows into bottom and top endpoint objects.
+
+```bash
+uv run python convert_hamburg_data.py convert \
+  hamburg_buildings_facade_amenities_trees.csv \
+  --objects-out data/hamburg_objects.jsonl \
+  --patterns-out data/hamburg_patterns_5.json \
+  --metadata-out data/hamburg_conversion_metadata.json
+```
+
+The object JSONL is compatible with `load_objects_jsonl`, and the pattern JSON
+is compatible with `load_patterns_json`.
+
+Useful converter options:
+
+```bash
+# Keep the original large projected coordinates instead of subtracting min x/y/z.
+uv run python convert_hamburg_data.py convert input.csv --no-normalize-origin
+
+# Also emit a single centroid object per base prism/area.
+uv run python convert_hamburg_data.py convert input.csv --include-centroid
+
+# Ignore facade openings, or emit one center point per opening instead of endpoints.
+uv run python convert_hamburg_data.py convert input.csv --opening-policy skip
+uv run python convert_hamburg_data.py convert input.csv --opening-policy point
+
+# For flat OSM area features with missing z, set the imputed bottom/top z values.
+uv run python convert_hamburg_data.py convert input.csv --flat-z 0 --flat-thickness 1
+
+# Debug on a small prefix of the CSV.
+uv run python convert_hamburg_data.py convert input.csv --max-rows 50000
+```
+
+The converter writes `hamburg_conversion_metadata.json` with row counts, object
+counts, origin shift, before/after bounds, feature-type counts, role counts, and
+the most common emitted keywords.  Keyword examples include `building_bottom`,
+`building_top`, `tree_bottom`, `park_bottom`, `apartments_bottom`,
+`school_bottom`, `door_bottom`, and `window_top`.
+
+List the suggested real-data patterns:
+
+```bash
+uv run python convert_hamburg_data.py list-patterns
+```
+
+Smoke-test a small slice of the CSV:
+
+```bash
+uv run python convert_hamburg_data.py smoke-test \
+  hamburg_buildings_facade_amenities_trees.csv \
+  --max-rows 50000 \
+  --match-limit 10
+```
+
+Run the five patterns against the converted full object file:
+
+```bash
+uv run python convert_hamburg_data.py run-patterns \
+  --objects data/hamburg_objects.jsonl \
+  --patterns data/hamburg_patterns_5.json \
+  --results-out data/hamburg_pattern_results.jsonl \
+  --summary-out data/hamburg_pattern_summary.json \
+  --match-limit 1000
+```
+
+`run-patterns` builds the same inverted octree index used by the matcher, runs
+each pattern, and writes per-pattern timing, match counts, n-match/e-match
+counts, keyword postings, skip-edge information, and rough RSS memory readings.
+Use `--match-limit 0` only when you really want to enumerate every match.
+
+The five suggested Hamburg patterns are:
+
+1. `hamburg_p01_highrise_vertical_extent`: `highrise_bottom` near `highrise_top`.
+2. `hamburg_p02_facade_door_window_stack`: `door_bottom`, `window_top`, and `building_top`.
+3. `hamburg_p03_hospital_green_buffer`: `hospital_bottom`, `park_bottom`, and `tree_bottom`.
+4. `hamburg_p04_education_play_cluster`: `school_bottom`, `kindergarten_bottom`, and `playground_bottom`.
+5. `hamburg_p05_transit_retail_parking`: `train_station_bottom`, `retail_bottom`, and `parking_bottom`.
+
+These are intentionally baseline patterns, not claims about urban planning.  You
+should tune distance intervals after inspecting match counts and selectivity on
+the converted dataset.
 
 ## Run scalability and graph-sparsity benchmarks
 
@@ -564,4 +660,78 @@ python main.py --scales 10000 --sparsity-profiles medium_graph --pattern-count 2
 python main.py --scales 100000 --sparsity-profiles sparse_graph dense_graph --pattern-count 20
 python main.py --scales 1m --sparsity-profiles sparse_graph --match-limit 1000 --isolate-scenarios
 python main.py --scales 10m --sparsity-profiles very_sparse_graph --match-limit 1000 --max-level 10 --isolate-scenarios
+```
+
+## Formatting benchmark results as a LaTeX table
+
+After running benchmark jobs, you can convert the generated summaries into a
+LaTeX table with dataset size as rows and sparsity profile as columns. Each
+sparsity profile receives two subcolumns: `Time (s)` and `Peak RAM (GB)`.
+
+For your Slurm output layout, where results are written under paths like
+`results/10m/sparse_graph`, run:
+
+```bash
+uv run python format_results_latex.py \
+  --results-root results \
+  --sizes 10k 100k 1m 10m \
+  --sparsity-profiles very_sparse_graph sparse_graph medium_graph dense_graph very_dense_graph \
+  --output results/scalability_table.tex
+```
+
+The default table now uses:
+
+- `scenario_total_time_s` for the time column. This is the end-to-end scenario
+  wall time, including synthetic data generation, index construction, and all
+  pattern matching in that scenario.
+- `rss_peak_scenario_mb` for the RAM column. This is the maximum total process
+  RSS observed during the scenario. In other words, it includes the loaded
+  synthetic dataset, octree index, Python runtime, and the temporary memory used
+  by the matching method. The table converts the stored RSS value to GB and
+  prints the header as `Peak RAM (GB)`.
+
+The formatter intentionally prints numeric cells without thousands separators,
+so a value such as `12345.68` is emitted instead of `12,345.68`.
+
+Useful alternatives:
+
+```bash
+# Use total matching time only, excluding generation and index construction.
+uv run python format_results_latex.py \
+  --results-root results \
+  --time-metric match_time_total_s \
+  --output results/match_time_table.tex
+
+# Use absolute peak RSS observed during pattern matching only. This still means
+# total process memory, not a delta; it includes the already-loaded index.
+uv run python format_results_latex.py \
+  --results-root results \
+  --ram-metric rss_peak_match_max_mb \
+  --output results/match_peak_ram_table.tex
+
+# Make a table for one specific pattern from *_summary_by_pattern.json files.
+uv run python format_results_latex.py \
+  --results-root results \
+  --source pattern \
+  --pattern-name p01_residential_area \
+  --sizes 10k 100k 1m 10m \
+  --sparsity-profiles very_sparse_graph sparse_graph medium_graph dense_graph very_dense_graph \
+  --output results/p01_scalability_table.tex
+```
+
+If you enabled `--memory-trace-interval` during benchmarking and a scenario was
+killed before writing a normal summary, the formatter will use the trace file to
+recover the best available peak RAM estimate. Such values are marked with a
+LaTeX dagger (`$^\dagger$`) and should be treated as partial.
+
+The generated table uses `booktabs`; add this to your paper preamble:
+
+```latex
+\usepackage{booktabs}
+```
+
+If you use `--resize-to-textwidth`, also add:
+
+```latex
+\usepackage{graphicx}
 ```

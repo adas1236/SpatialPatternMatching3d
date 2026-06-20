@@ -1,0 +1,227 @@
+[
+  {
+    "description": "A high-rise bottom and high-rise top separated by a plausible vertical height. This checks that prism endpoints preserve vertical information without joining every building.",
+    "edges": [
+      {
+        "lower": 30.0,
+        "sign": "--",
+        "source": "B0",
+        "target": "BT",
+        "upper": 180.0
+      }
+    ],
+    "name": "hamburg_p01_highrise_vertical_extent",
+    "template_points": {
+      "B0": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "BT": [
+        0.0,
+        0.0,
+        60.0
+      ]
+    },
+    "vertices": {
+      "B0": "highrise_bottom",
+      "BT": "highrise_top"
+    }
+  },
+  {
+    "description": "A facade door lower endpoint, facade window upper endpoint, and building top. Useful for rows that contain Door/Window facade annotations.",
+    "edges": [
+      {
+        "lower": 1.0,
+        "sign": "--",
+        "source": "D",
+        "target": "W",
+        "upper": 45.0
+      },
+      {
+        "lower": 0.0,
+        "sign": "--",
+        "source": "W",
+        "target": "BT",
+        "upper": 120.0
+      },
+      {
+        "lower": 2.0,
+        "sign": "--",
+        "source": "D",
+        "target": "BT",
+        "upper": 140.0
+      }
+    ],
+    "name": "hamburg_p02_facade_door_window_stack",
+    "template_points": {
+      "BT": [
+        0.0,
+        0.0,
+        30.0
+      ],
+      "D": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "W": [
+        0.0,
+        0.0,
+        15.0
+      ]
+    },
+    "vertices": {
+      "BT": "building_top",
+      "D": "door_bottom",
+      "W": "window_top"
+    }
+  },
+  {
+    "description": "Hospital near a park and nearby trees.",
+    "edges": [
+      {
+        "lower": 0.0,
+        "sign": "--",
+        "source": "H",
+        "target": "P",
+        "upper": 800.0
+      },
+      {
+        "lower": 0.0,
+        "sign": "--",
+        "source": "H",
+        "target": "T",
+        "upper": 120.0
+      },
+      {
+        "lower": 0.0,
+        "sign": "--",
+        "source": "P",
+        "target": "T",
+        "upper": 300.0
+      }
+    ],
+    "name": "hamburg_p03_hospital_green_buffer",
+    "template_points": {
+      "H": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "P": [
+        350.0,
+        0.0,
+        0.0
+      ],
+      "T": [
+        60.0,
+        0.0,
+        0.0
+      ]
+    },
+    "vertices": {
+      "H": "hospital_bottom",
+      "P": "park_bottom",
+      "T": "tree_bottom"
+    }
+  },
+  {
+    "description": "School and kindergarten near the same playground.",
+    "edges": [
+      {
+        "lower": 0.0,
+        "sign": "--",
+        "source": "S",
+        "target": "G",
+        "upper": 500.0
+      },
+      {
+        "lower": 0.0,
+        "sign": "--",
+        "source": "K",
+        "target": "G",
+        "upper": 500.0
+      },
+      {
+        "lower": 0.0,
+        "sign": "--",
+        "source": "S",
+        "target": "K",
+        "upper": 1000.0
+      }
+    ],
+    "name": "hamburg_p04_education_play_cluster",
+    "template_points": {
+      "G": [
+        150.0,
+        0.0,
+        0.0
+      ],
+      "K": [
+        250.0,
+        0.0,
+        0.0
+      ],
+      "S": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "vertices": {
+      "G": "playground_bottom",
+      "K": "kindergarten_bottom",
+      "S": "school_bottom"
+    }
+  },
+  {
+    "description": "Train station, retail building, and parking feature in a local-access pattern.",
+    "edges": [
+      {
+        "lower": 0.0,
+        "sign": "--",
+        "source": "T",
+        "target": "R",
+        "upper": 1200.0
+      },
+      {
+        "lower": 0.0,
+        "sign": "--",
+        "source": "R",
+        "target": "P",
+        "upper": 300.0
+      },
+      {
+        "lower": 0.0,
+        "sign": "--",
+        "source": "T",
+        "target": "P",
+        "upper": 1200.0
+      }
+    ],
+    "name": "hamburg_p05_transit_retail_parking",
+    "template_points": {
+      "P": [
+        650.0,
+        0.0,
+        0.0
+      ],
+      "R": [
+        500.0,
+        0.0,
+        0.0
+      ],
+      "T": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "vertices": {
+      "P": "parking_bottom",
+      "R": "retail_bottom",
+      "T": "train_station_bottom"
+    }
+  }
+]
